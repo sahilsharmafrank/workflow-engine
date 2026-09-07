@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { WorkflowStatus } from "@wfe/sdk";
 import { DbContext } from "../../src/db/db-context";
+import { Progress } from "../../src/entities/progress";
 import { StepRun } from "../../src/entities/step-run";
 import { WorkflowRun } from "../../src/entities/workflow-run";
 
@@ -73,9 +74,17 @@ describe("persistence", () => {
     expect(loaded.message!.endsWith("...")).toBe(true);
   });
 
-  it("defaults tenantId to 'default'", async () => {
-    const saved = await saveRun();
-    expect(saved.tenantId).toBe("default");
+  it("defaults tenantId to 'default' at the database level", async () => {
+    // Bypasses the entity/repository entirely — a raw INSERT with tenant_id
+    // omitted is the honest way to exercise the column's DEFAULT 'default',
+    // rather than asserting a value the test itself just set.
+    const ds = await db.getDataSource();
+    const rows = await ds.query(
+      `INSERT INTO workflow_run (name, version, current_step, status)
+       VALUES ($1, $2, $3, $4) RETURNING tenant_id`,
+      ["no-tenant-set", "1.0.0", -1, WorkflowStatus.STARTING]
+    );
+    expect(rows[0].tenant_id).toBe("default");
   });
 
   it("writes run_id on cascaded step rows", async () => {
@@ -83,5 +92,32 @@ describe("persistence", () => {
     const ds = await db.getDataSource();
     const rows = await ds.query("SELECT run_id FROM step_run WHERE run_id = $1", [saved.id]);
     expect(rows).toHaveLength(2);
+  });
+
+  it("memoizes concurrent getDataSource calls to a single DataSource", async () => {
+    const cold = new DbContext({ dbUrl: container.getConnectionUri(), showSql: false });
+    try {
+      const [a, b] = await Promise.all([cold.getDataSource(), cold.getDataSource()]);
+      expect(a).toBe(b);
+    } finally {
+      await cold.close();
+    }
+  });
+
+  it("round-trips progress through the bigint columns as numbers", async () => {
+    const saved = await saveRun();
+    const ds = await db.getDataSource();
+    const step = saved.stepRuns![0];
+    step.progress = new Progress();
+    step.progress.units = "items";
+    step.progress.totalExpected = 100;
+    step.progress.currentProgress = 42;
+    await ds.getRepository(StepRun).save(step);
+
+    const loaded = await ds.getRepository(StepRun).findOneByOrFail({ id: step.id });
+    expect(typeof loaded.progress!.totalExpected).toBe("number");
+    expect(typeof loaded.progress!.currentProgress).toBe("number");
+    expect(loaded.progress!.totalExpected).toBe(100);
+    expect(loaded.progress!.currentProgress).toBe(42);
   });
 });

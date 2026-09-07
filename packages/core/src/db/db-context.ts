@@ -20,15 +20,17 @@ export function connectionOptions(config: EngineConfig): DataSourceOptions {
 }
 
 export class DbContext {
-  private dataSource?: DataSource;
+  // Memoizes the in-flight promise, not the resolved value: two concurrent
+  // callers on a cold DbContext both see this as undefined only once, since
+  // the assignment happens synchronously before either await resolves — so
+  // only one DataSource/connection pool is ever constructed.
+  private dataSourcePromise?: Promise<DataSource>;
 
   constructor(private readonly config: EngineConfig) {}
 
   async getDataSource(): Promise<DataSource> {
-    if (!this.dataSource) {
-      this.dataSource = await new DataSource(connectionOptions(this.config)).initialize();
-    }
-    return this.dataSource;
+    this.dataSourcePromise ??= new DataSource(connectionOptions(this.config)).initialize();
+    return this.dataSourcePromise;
   }
 
   async runMigrations(): Promise<void> {
@@ -37,9 +39,14 @@ export class DbContext {
   }
 
   async close(): Promise<void> {
-    if (this.dataSource?.isInitialized) {
-      await this.dataSource.destroy();
+    const promise = this.dataSourcePromise;
+    this.dataSourcePromise = undefined;
+    if (!promise) {
+      return;
     }
-    this.dataSource = undefined;
+    const ds = await promise;
+    if (ds.isInitialized) {
+      await ds.destroy();
+    }
   }
 }

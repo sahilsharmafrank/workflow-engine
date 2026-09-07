@@ -17,10 +17,14 @@ export class StepRun implements StepRunLike {
   @PrimaryGeneratedColumn()
   id?: number;
 
-  // Written by the cascade insert from WorkflowRun; the FK is declared on the
-  // relation below via @JoinColumn, so this must not claim the column itself.
-  @Column({ type: "int", nullable: true })
-  runId?: number;
+  // Mirror of the FK for reading the value without a join. The FK is owned by
+  // the @ManyToOne + @JoinColumn relation below; both declarations resolve to
+  // the same physical "run_id" column, which is how TypeORM lets you read/write
+  // it either as a plain scalar or through the relation. The column is NOT NULL
+  // in the migration — a step row without a run is meaningless — so this says
+  // the same.
+  @Column({ type: "int", nullable: false })
+  runId!: number;
 
   @Column({ type: "int", nullable: false })
   stepNumber!: number;
