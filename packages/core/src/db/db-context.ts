@@ -6,6 +6,7 @@ import { StepRun } from "../entities/step-run";
 import { WorkflowDefinitionEntity } from "../entities/workflow-definition";
 import { WorkflowRun } from "../entities/workflow-run";
 import { Init0001 } from "./migrations/0001-init";
+import { QueueSupport0002 } from "./migrations/0002-queue-support";
 
 export function connectionOptions(config: EngineConfig): DataSourceOptions {
   return {
@@ -13,7 +14,7 @@ export function connectionOptions(config: EngineConfig): DataSourceOptions {
     url: config.dbUrl,
     namingStrategy: new SnakeNamingStrategy(),
     entities: [WorkflowDefinitionEntity, WorkflowRun, StepRun],
-    migrations: [Init0001],
+    migrations: [Init0001, QueueSupport0002],
     synchronize: false,
     logging: config.showSql ?? false,
   };

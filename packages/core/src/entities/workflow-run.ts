@@ -1,7 +1,7 @@
 import { WorkflowParameters, WorkflowRunLike, WorkflowStatus } from "@wfe/sdk";
 import {
   AfterLoad, BeforeInsert, BeforeUpdate, Column, CreateDateColumn, Entity, OneToMany,
-  PrimaryGeneratedColumn, UpdateDateColumn,
+  PrimaryGeneratedColumn, UpdateDateColumn, VersionColumn,
 } from "typeorm";
 import { StepRun } from "./step-run";
 
@@ -21,6 +21,15 @@ export class WorkflowRun implements WorkflowRunLike {
 
   @Column({ type: "varchar", length: 50, nullable: false })
   version!: string;
+
+  /**
+   * Optimistic-lock counter incremented by TypeORM on every save; a stale value
+   * makes the UPDATE match zero rows. Named `revision`, NOT `version`, because
+   * `version` on this entity already holds the workflow definition's version
+   * string and is load-bearing in the executor and the SDK's WorkflowRunLike.
+   */
+  @VersionColumn()
+  revision!: number;
 
   @Column({ type: "int", nullable: false })
   currentStep!: number;

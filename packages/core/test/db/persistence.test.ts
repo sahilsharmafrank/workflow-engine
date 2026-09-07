@@ -95,6 +95,14 @@ describe("persistence", () => {
     expect(rows).toHaveLength(2);
   });
 
+  it("stamps tenantId onto cascaded step rows", async () => {
+    const saved = await saveRun();
+    const ds = await db.getDataSource();
+    const rows = await ds.query("SELECT tenant_id FROM step_run WHERE run_id = $1", [saved.id]);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r: { tenant_id: string }) => r.tenant_id === "default")).toBe(true);
+  });
+
   it("memoizes concurrent getDataSource calls to a single DataSource", async () => {
     const cold = new DbContext({ dbUrl: container.getConnectionUri(), showSql: false });
     try {

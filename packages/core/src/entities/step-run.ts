@@ -26,6 +26,9 @@ export class StepRun implements StepRunLike {
   @Column({ type: "int", nullable: false })
   runId!: number;
 
+  @Column({ type: "varchar", length: 64, nullable: false, default: "default" })
+  tenantId!: string;
+
   @Column({ type: "int", nullable: false })
   stepNumber!: number;
 

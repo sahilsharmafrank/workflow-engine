@@ -86,6 +86,7 @@ export class WorkflowManager {
     run.state = {};
     run.stepRuns = definition.definition.steps.map((stepDefinition, index) => {
       const step = new StepRun();
+      step.tenantId = input.tenantId;
       step.stepNumber = index;
       step.stepName = stepDefinition.stepName;
       step.stepType = resolveStepType(stepDefinition);
