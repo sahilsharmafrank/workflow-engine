@@ -16,7 +16,7 @@ jest.setTimeout(120000);
 class DelayingStep extends BaseStep {
   async run(ctx: StepContext): Promise<RunStepResponse> {
     ctx.step.status = WorkflowStatus.WAITING;
-    return { stepState: ctx.step, delaySeconds: 30 };
+    return { stepState: ctx.step, suspend: { kind: "delay", delaySeconds: 30 } };
   }
 }
 
@@ -166,14 +166,14 @@ describe("RunExecutor.executeStep", () => {
     expect(reloaded!.stepRuns![0].status).toBe(WorkflowStatus.FAILED);
   });
 
-  it("returns delaySeconds and leaves the step WAITING", async () => {
+  it("returns the delay suspension and leaves the step WAITING", async () => {
     const runId = await startRun("delayed", [
       { stepName: "D", stepVersion: "1.0.0", stepType: "test.delaying", stepInputs: [] },
     ]);
 
     const run = await runs.findById("default", runId);
     const result = await executor.executeStep(run!, 0);
-    expect(result.delaySeconds).toBe(30);
+    expect(result.suspend).toEqual({ kind: "delay", delaySeconds: 30 });
     expect(result.run.stepRuns![0].status).toBe(WorkflowStatus.WAITING);
   });
 

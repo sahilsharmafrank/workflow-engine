@@ -1,5 +1,6 @@
 import {
-  PreFlightCheckActionOutcome, StepContext, StepDefinition, WorkflowStatus, isResumeBlocked, resolveStepType,
+  PreFlightCheckActionOutcome, StepContext, StepDefinition, StepSuspension, WorkflowStatus, isResumeBlocked,
+  resolveStepType,
 } from "@wfe/sdk";
 import { pick } from "lodash";
 import { WorkflowRun } from "../entities/workflow-run";
@@ -9,7 +10,7 @@ import { WorkflowManager } from "./workflow-manager";
 
 export interface ExecuteStepResult {
   run: WorkflowRun;
-  delaySeconds?: number;
+  suspend?: StepSuspension;
 }
 
 /** Step statuses executeStep must not overwrite after step.run() returns. */
@@ -66,6 +67,13 @@ export class RunExecutor extends WorkflowManager {
       type: resolveStepType(stepDefinition),
     });
 
+    // A step that suspended was left WAITING; re-entering it is by
+    // definition a resume. Deriving this from the payload instead would be
+    // wrong: a delay resume carries no body, so the step would re-enter as a
+    // first entry, suspend again, and the run would re-enqueue itself
+    // forever. This must be read before the status is overwritten below.
+    const isResume = stepRun.status === WorkflowStatus.WAITING;
+
     const config = this.expressionConfig();
     stepRun.lastStepAction = new Date();
     stepRun.status = WorkflowStatus.RUNNING;
@@ -103,9 +111,11 @@ export class RunExecutor extends WorkflowManager {
       // 3. Run.
       const ctx: StepContext = {
         config, logger: this.log, services: this.services,
-        run, step: stepRun, stepNumber, inputs, body,
+        run, step: stepRun, stepNumber, inputs, body, isResume,
       };
-      await step.onBeforeRun(ctx);
+      if (!isResume) {
+        await step.start(ctx);
+      }
       const response = await step.run(ctx);
 
       // Nothing else enforces that a step reaches a terminal status: a
@@ -113,8 +123,8 @@ export class RunExecutor extends WorkflowManager {
       // otherwise leave this row RUNNING forever while the run moves on.
       // Only settle it here when the step didn't already choose SKIPPED,
       // FAILED, WAITING or CANCELLED (or already COMPLETE) for itself, and
-      // isn't suspending via delaySeconds.
-      if (response.delaySeconds === undefined && !SETTLED_STEP_STATUSES.has(stepRun.status)) {
+      // isn't suspending.
+      if (!response.suspend && !SETTLED_STEP_STATUSES.has(stepRun.status)) {
         stepRun.status = WorkflowStatus.COMPLETE;
       }
 
@@ -144,7 +154,7 @@ export class RunExecutor extends WorkflowManager {
       }
 
       const saved = await this.runs.save(run);
-      return { run: saved, delaySeconds: response.delaySeconds };
+      return { run: saved, suspend: response.suspend };
     } catch (err) {
       stepRun.status = WorkflowStatus.FAILED;
       stepRun.message = (err as Error).message;
@@ -220,7 +230,7 @@ export class RunExecutor extends WorkflowManager {
       run = result.run;
       payload = undefined; // a callback payload applies only to the step it resumed
 
-      if (result.delaySeconds !== undefined) {
+      if (result.suspend) {
         run.status = WorkflowStatus.WAITING;
         return this.runs.save(run);
       }

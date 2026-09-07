@@ -18,10 +18,11 @@ export abstract class BaseStep {
   }
 
   /**
-   * Optional hook run after the declarative pre-flight check passes and before
-   * `run`. Override for step-specific setup; the default does nothing.
+   * Called before `run` on **first entry** into the step, not on resumption.
+   * Override for one-time setup — dispatching an external request, claiming a
+   * resource. The default does nothing.
    */
-  async onBeforeRun(_ctx: StepContext): Promise<void> {
+  async start(_ctx: StepContext): Promise<void> {
     return;
   }
 

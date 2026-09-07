@@ -26,7 +26,7 @@ class CountingStep extends BaseStep {
 class WaitingStep extends BaseStep {
   async run(ctx: StepContext): Promise<RunStepResponse> {
     ctx.step.status = WorkflowStatus.WAITING;
-    return { stepState: ctx.step, delaySeconds: 60 };
+    return { stepState: ctx.step, suspend: { kind: "delay", delaySeconds: 60 } };
   }
 }
 

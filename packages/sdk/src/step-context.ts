@@ -17,10 +17,22 @@ export interface StepContext {
   inputs: WorkflowParameters;
   /** Payload supplied by an external callback resuming this step, if any. */
   body?: unknown;
+  /** False on first entry into this step, true when a resume message re-entered it. */
+  isResume: boolean;
 }
+
+/**
+ * How a step asks the engine to suspend it. `delay` sleeps for a fixed period;
+ * `awaitCallback` parks the step until an external worker replies, optionally
+ * naming the queue the request was dispatched to and a correlation id to match
+ * the reply against.
+ */
+export type StepSuspension =
+  | { kind: "delay"; delaySeconds: number }
+  | { kind: "awaitCallback"; queue?: string; correlationId?: string };
 
 export interface RunStepResponse {
   stepState: StepRunLike;
-  /** When set, the executor suspends the run and resumes this step later. */
-  delaySeconds?: number;
+  /** When set, the executor suspends the run rather than advancing. */
+  suspend?: StepSuspension;
 }
