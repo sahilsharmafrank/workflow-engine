@@ -88,17 +88,40 @@ describe("captureParameters", () => {
     expect(params).toEqual({ timeout: 5 });
   });
 
-  it("preserves falsy scalar values during merge", async () => {
+  it("allows 0 to overwrite populated value in same field", async () => {
     const params = await captureParameters({
       evaluator,
       run,
       expressions: [
-        { targetFieldName: "zero", modelEvaluationExpression: "0" },
-        { targetFieldName: "empty", modelEvaluationExpression: '""' },
-        { targetFieldName: "falsy", modelEvaluationExpression: "false" },
+        { targetFieldName: "value", modelEvaluationExpression: "42" },
+        { targetFieldName: "value", modelEvaluationExpression: "0" },
       ],
     });
-    expect(params).toEqual({ zero: 0, empty: "", falsy: false });
+    expect(params).toEqual({ value: 0 });
+  });
+
+  it("allows empty string to overwrite populated value in same field", async () => {
+    const params = await captureParameters({
+      evaluator,
+      run,
+      expressions: [
+        { targetFieldName: "label", modelEvaluationExpression: '"initial"' },
+        { targetFieldName: "label", modelEvaluationExpression: '""' },
+      ],
+    });
+    expect(params).toEqual({ label: "" });
+  });
+
+  it("allows false to overwrite populated value in same field", async () => {
+    const params = await captureParameters({
+      evaluator,
+      run,
+      expressions: [
+        { targetFieldName: "enabled", modelEvaluationExpression: "true" },
+        { targetFieldName: "enabled", modelEvaluationExpression: "false" },
+      ],
+    });
+    expect(params).toEqual({ enabled: false });
   });
 
   it("passes config and body through to expressions", async () => {
