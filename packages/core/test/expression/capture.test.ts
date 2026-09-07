@@ -76,6 +76,31 @@ describe("captureParameters", () => {
     expect(params).toEqual({ opts: { a: 1 } });
   });
 
+  it("preserves scalar when empty object is merged later at same field", async () => {
+    const params = await captureParameters({
+      evaluator,
+      run,
+      expressions: [
+        { targetFieldName: "timeout", modelEvaluationExpression: "5" },
+        { targetFieldName: "timeout", modelEvaluationExpression: "({})" },
+      ],
+    });
+    expect(params).toEqual({ timeout: 5 });
+  });
+
+  it("preserves falsy scalar values during merge", async () => {
+    const params = await captureParameters({
+      evaluator,
+      run,
+      expressions: [
+        { targetFieldName: "zero", modelEvaluationExpression: "0" },
+        { targetFieldName: "empty", modelEvaluationExpression: '""' },
+        { targetFieldName: "falsy", modelEvaluationExpression: "false" },
+      ],
+    });
+    expect(params).toEqual({ zero: 0, empty: "", falsy: false });
+  });
+
   it("passes config and body through to expressions", async () => {
     const params = await captureParameters({
       evaluator,
