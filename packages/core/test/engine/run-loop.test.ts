@@ -6,6 +6,8 @@ import {
 import { DbContext } from "../../src/db/db-context";
 import { RunExecutor } from "../../src/engine/run-executor";
 import { ExpressionEvaluator } from "../../src/expression/evaluator";
+import { MemoryQueueDriver } from "../../src/queue/memory-driver";
+import { DELAY_QUEUE } from "../../src/queue/names";
 import { StepRegistry, registerBuiltInSteps } from "../../src/registry/step-registry";
 import { DefinitionRepository } from "../../src/repositories/definition-repository";
 import { RunRepository } from "../../src/repositories/run-repository";
@@ -49,6 +51,7 @@ describe("RunExecutor.run", () => {
   let runs: RunRepository;
   let definitions: DefinitionRepository;
   let evaluator: ExpressionEvaluator;
+  let queue: MemoryQueueDriver;
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
@@ -62,14 +65,20 @@ describe("RunExecutor.run", () => {
     registry.register({ type: "test.waiting", version: "1.0.0", factory: (p) => new WaitingStep(p) });
     registry.register({ type: "test.cancelling", version: "1.0.0", factory: (p) => new CancellingStep(p) });
 
+    // This suite's WaitingStep suspends; a queue driver is required or the
+    // executor now throws QUEUE_NOT_CONFIGURED instead of silently parking.
+    // The memory driver's queue is otherwise unused here (nothing drains it).
+    queue = new MemoryQueueDriver();
+    await queue.ensureQueues([{ queueName: DELAY_QUEUE }]);
     evaluator = new ExpressionEvaluator({ timeoutMs: 200 });
-    executor = new RunExecutor({ config, db, registry, evaluator });
+    executor = new RunExecutor({ config, db, registry, evaluator, queue });
     runs = new RunRepository(db);
     definitions = new DefinitionRepository(db);
   });
 
   afterAll(async () => {
     evaluator.dispose();
+    await queue.close();
     await db.close();
     await container.stop();
   });

@@ -9,6 +9,7 @@ import { WorkflowRun } from "../entities/workflow-run";
 import { WfeError } from "../errors";
 import { ExpressionEvaluator } from "../expression/evaluator";
 import { createLogger } from "../logging";
+import { QueueDriver } from "../queue/types";
 import { StepRegistry } from "../registry/step-registry";
 import { validateAgainstRegistry } from "../registry/validate";
 import { DefinitionRepository } from "../repositories/definition-repository";
@@ -21,6 +22,7 @@ export interface EngineDeps {
   evaluator: ExpressionEvaluator;
   services?: Record<string, unknown>;
   logger?: Logger;
+  queue?: QueueDriver;
 }
 
 export interface StartWorkflowInput {
@@ -40,6 +42,7 @@ export class WorkflowManager {
   protected readonly log: Logger;
   protected readonly definitions: DefinitionRepository;
   protected readonly runs: RunRepository;
+  protected readonly queue?: QueueDriver;
 
   constructor(deps: EngineDeps) {
     this.config = deps.config;
@@ -50,6 +53,7 @@ export class WorkflowManager {
     this.log = deps.logger ?? createLogger("workflow-manager");
     this.definitions = new DefinitionRepository(deps.db);
     this.runs = new RunRepository(deps.db);
+    this.queue = deps.queue;
   }
 
   protected async lookupDefinition(input: StartWorkflowInput): Promise<WorkflowDefinitionEntity> {

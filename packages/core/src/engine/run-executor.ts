@@ -6,6 +6,8 @@ import { pick } from "lodash";
 import { WorkflowRun } from "../entities/workflow-run";
 import { WfeError } from "../errors";
 import { captureParameters } from "../expression/capture";
+import { WorkflowMessage } from "../queue/types";
+import { planSuspension } from "./suspension";
 import { WorkflowManager } from "./workflow-manager";
 
 export interface ExecuteStepResult {
@@ -95,7 +97,7 @@ export class RunExecutor extends WorkflowManager {
           if (actionOnFailure === PreFlightCheckActionOutcome.SKIP) {
             stepRun.status = WorkflowStatus.SKIPPED;
             stepRun.message = message;
-            await this.runs.save(run);
+            await this.runs.saveChecked(run);
             return { run };
           }
           stepRun.message = message; // CONTINUE
@@ -150,10 +152,18 @@ export class RunExecutor extends WorkflowManager {
       // has moved to a resume-blocked state, preserve it instead.
       const authoritativeStatus = await this.runs.getStatus(run.tenantId, run.id!);
       if (authoritativeStatus && isResumeBlocked(authoritativeStatus)) {
+        // Another writer (e.g. an operator's cancel()) already committed a
+        // halting status while this step was running, on its own fresh
+        // entity — this `run`'s revision predates that write. saveChecked
+        // would spuriously conflict against it, and losing that race would
+        // fall into the catch block below and clobber the correct status
+        // with FAILED. That write already persisted the authoritative state,
+        // so just reconcile in memory and return without writing again.
         run.status = authoritativeStatus;
+        return { run, suspend: response.suspend };
       }
 
-      const saved = await this.runs.save(run);
+      const saved = await this.runs.saveChecked(run);
       return { run: saved, suspend: response.suspend };
     } catch (err) {
       stepRun.status = WorkflowStatus.FAILED;
@@ -224,7 +234,7 @@ export class RunExecutor extends WorkflowManager {
 
       run.currentStep = nextStep;
       run.status = WorkflowStatus.RUNNING;
-      run = await this.runs.save(run);
+      run = await this.runs.saveChecked(run);
 
       const result = await this.executeStep(run, nextStep, payload);
       run = result.run;
@@ -232,7 +242,9 @@ export class RunExecutor extends WorkflowManager {
 
       if (result.suspend) {
         run.status = WorkflowStatus.WAITING;
-        return this.runs.save(run);
+        const saved = await this.runs.saveChecked(run);
+        await this.publishSuspension(saved, nextStep, result.suspend, 0);
+        return saved;
       }
 
       nextStep += 1;
@@ -240,7 +252,68 @@ export class RunExecutor extends WorkflowManager {
 
     run.currentStep = steps.length - 1;
     run.status = WorkflowStatus.COMPLETE;
-    return this.runs.save(run);
+    return this.runs.saveChecked(run);
+  }
+
+  /**
+   * Publishes the message that will resume this step. Core owns this rather
+   * than the caller so a delay longer than the driver's limit can be chained
+   * transparently — spec §8.
+   */
+  protected async publishSuspension(
+    run: WorkflowRun, stepNumber: number, suspend: StepSuspension, carried: number
+  ): Promise<void> {
+    if (!this.queue) {
+      throw new WfeError(
+        `Step ${stepNumber} of run ${run.id} suspended, but no queue driver is configured to resume it`,
+        { statusCode: 500, code: "QUEUE_NOT_CONFIGURED" }
+      );
+    }
+
+    const effective: StepSuspension =
+      carried > 0 ? { kind: "delay", delaySeconds: carried } : suspend;
+    const plan = planSuspension(effective, this.queue.maxDelaySeconds);
+
+    await this.queue.publish(
+      plan.queue,
+      {
+        tenantId: run.tenantId,
+        runId: run.id!,
+        stepNumber,
+        kind: "resume",
+        correlationId: effective.kind === "awaitCallback" ? effective.correlationId : undefined,
+        attempt: plan.remaining,
+      },
+      { delaySeconds: plan.delaySeconds }
+    );
+  }
+
+  /**
+   * Entry point for a queue consumer. Chains the next hop when the message
+   * still carries unspent delay, otherwise re-enters the advance loop — where
+   * the Phase 1 guards discard duplicates and stale deliveries.
+   */
+  async resume(msg: WorkflowMessage): Promise<WorkflowRun> {
+    if (msg.attempt && msg.attempt > 0) {
+      const run = await this.runs.findById(msg.tenantId, msg.runId);
+      if (!run) {
+        throw new WfeError(`Cannot locate workflow run ${msg.runId}`, {
+          statusCode: 404, code: "RUN_NOT_FOUND",
+        });
+      }
+      if (isResumeBlocked(run.status)) {
+        this.log.warn("Discarding chained delay for a run in a blocked state", {
+          runId: msg.runId, status: run.status,
+        });
+        return run;
+      }
+      await this.publishSuspension(
+        run, msg.stepNumber, { kind: "delay", delaySeconds: msg.attempt }, msg.attempt
+      );
+      return run;
+    }
+
+    return this.run(msg.tenantId, msg.runId, msg.stepNumber, msg.body);
   }
 
   /** Marks a run cancelled. In-flight steps are not interrupted. */
