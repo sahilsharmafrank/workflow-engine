@@ -106,6 +106,51 @@ describe("ExpressionEvaluator", () => {
     }, 10000);
   });
 
+  describe("isolate self-disposal recovery", () => {
+    // isolated-vm disposes an isolate outright when it exceeds its memory
+    // limit — it does not just fail the one script. Against the old code
+    // (a single isolate built once in the constructor) this OOM would
+    // permanently kill every later evaluate() call on this instance; the
+    // fix lazily recreates the isolate on next use.
+    it("recovers evaluation after an out-of-memory disposes the isolate", async () => {
+      const tight = new ExpressionEvaluator({ timeoutMs: 5000, memoryLimitMb: 8 });
+      try {
+        await expect(
+          tight.evaluate(
+            "(function(){ const arr = []; while(true) { arr.push(new Array(1e6).fill(0)); } })()",
+            scope
+          )
+        ).rejects.toThrow();
+
+        // The mirror of the timeout-recovery assertion above: a disposal is
+        // expected, recoverable behaviour, not evaluator-ending damage.
+        await expect(tight.evaluate("1 + 1", scope)).resolves.toBe(2);
+      } finally {
+        tight.dispose();
+      }
+    }, 10000);
+  });
+
+  describe("dispose()", () => {
+    it("does not throw when called twice in a row", async () => {
+      const e = new ExpressionEvaluator();
+      await e.evaluate("1 + 1", scope);
+      expect(() => e.dispose()).not.toThrow();
+      expect(() => e.dispose()).not.toThrow();
+    });
+
+    it("does not throw after the isolate has already self-disposed (OOM)", async () => {
+      const tight = new ExpressionEvaluator({ timeoutMs: 5000, memoryLimitMb: 8 });
+      await tight
+        .evaluate(
+          "(function(){ const arr = []; while(true) { arr.push(new Array(1e6).fill(0)); } })()",
+          scope
+        )
+        .catch(() => undefined);
+      expect(() => tight.dispose()).not.toThrow();
+    }, 10000);
+  });
+
   it("throws a WfeError naming the failing expression", async () => {
     const expression = "workflowState.missing.deep";
     let caught: unknown;

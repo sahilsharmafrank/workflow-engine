@@ -21,12 +21,27 @@ const DEFAULT_MEMORY_MB = 32;
  * reachable data is what this class copies in.
  */
 export class ExpressionEvaluator {
-  private readonly isolate: ivm.Isolate;
+  // Lazily created (and re-created) rather than built once in the constructor:
+  // isolated-vm *disposes* an isolate outright when it exceeds its memory
+  // limit — it does not just fail the one script — so a single oversized
+  // expression would otherwise permanently kill every later evaluate() call
+  // for the lifetime of this instance. See ensureIsolate().
+  private isolate?: ivm.Isolate;
   private readonly timeoutMs: number;
+  private readonly memoryLimitMb: number;
 
   constructor(options: EvaluatorOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.isolate = new ivm.Isolate({ memoryLimit: options.memoryLimitMb ?? DEFAULT_MEMORY_MB });
+    this.memoryLimitMb = options.memoryLimitMb ?? DEFAULT_MEMORY_MB;
+  }
+
+  /** Creates the isolate on first use, and transparently replaces it if a prior
+   * call caused isolated-vm to dispose it (e.g. a memory-limit violation). */
+  private ensureIsolate(): ivm.Isolate {
+    if (!this.isolate || this.isolate.isDisposed) {
+      this.isolate = new ivm.Isolate({ memoryLimit: this.memoryLimitMb });
+    }
+    return this.isolate;
   }
 
   /** Preserves the original engine's step-name addressing rewrite. */
@@ -51,7 +66,8 @@ export class ExpressionEvaluator {
   }
 
   async evaluate(expression: string, scope: EvaluationScope): Promise<unknown> {
-    const context = await this.isolate.createContext();
+    const isolate = this.ensureIsolate();
+    const context = await isolate.createContext();
     let script: ivm.Script | undefined;
     try {
       const jail = context.global;
@@ -66,7 +82,7 @@ export class ExpressionEvaluator {
         expression
       )}); })(__workflowState, __config, __body)`;
 
-      script = await this.isolate.compileScript(source);
+      script = await isolate.compileScript(source);
       return await script.run(context, { timeout: this.timeoutMs, copy: true });
     } catch (err) {
       const { code, cause } = ExpressionEvaluator.classify(err);
@@ -83,6 +99,9 @@ export class ExpressionEvaluator {
   }
 
   dispose(): void {
-    this.isolate.dispose();
+    if (this.isolate && !this.isolate.isDisposed) {
+      this.isolate.dispose();
+    }
+    this.isolate = undefined;
   }
 }
