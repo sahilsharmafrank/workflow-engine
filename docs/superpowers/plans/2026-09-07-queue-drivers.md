@@ -595,7 +595,9 @@ git commit -m "feat(core): add queue driver contract, registry and in-memory dri
 
 **Interfaces:**
 - Consumes: Phase 1 entities and `RunRepository`.
-- Produces: `WorkflowRun.version` (`@VersionColumn`); `StepRun.tenantId`; `RunRepository.saveChecked(run): Promise<WorkflowRun>` throwing `WfeError` code `RUN_CONFLICT` (409) on a stale write; migration `QueueSupport0002`. Tasks 4, 5 and 8 use `saveChecked` on every path a queue consumer can reach.
+- Produces: `WorkflowRun.revision` (`@VersionColumn`); `StepRun.tenantId`; `RunRepository.saveChecked(run): Promise<WorkflowRun>` throwing `WfeError` code `RUN_CONFLICT` (409) on a stale write; migration `QueueSupport0002`. Tasks 4, 5 and 8 use `saveChecked` on every path a queue consumer can reach.
+
+**Naming:** the optimistic-lock counter is `revision`, not `version`. `WorkflowRun.version` already exists as a `varchar(50)` holding the workflow *definition's* version, is read by the executor to resolve the definition on resume, and is declared as `version: string` on `WorkflowRunLike` in the SDK. Reusing the name would collide in Postgres, in TypeScript, and in the SDK contract.
 
 **Why now:** at-least-once delivery means two consumers can receive the same resume message and both pass the Phase 1 guards, because both read the same `currentStep` before either writes. TypeORM's `save()` is a blind full-row UPDATE, so the loser silently overwrites the winner — the same mechanism that lost `cancel()` in Phase 1. A version column turns that into a loud 409 the consumer can discard. `step_run.tenant_id` lands in the same migration because Plan 3's `GET /steps/next` claim path needs a tenant-scoped index and adding it later is a second migration over a bigger table.
 
@@ -644,16 +646,16 @@ describe("optimistic concurrency", () => {
     return runs.save(run);
   }
 
-  it("starts a new run at version 1", async () => {
+  it("starts a new run at revision 1", async () => {
     const saved = await newRun();
-    expect(saved.version).toBe(1);
+    expect(saved.revision).toBe(1);
   });
 
-  it("increments the version on each save", async () => {
+  it("increments the revision on each save", async () => {
     const saved = await newRun();
     saved.status = WorkflowStatus.WAITING;
     const again = await runs.saveChecked(saved);
-    expect(again.version).toBe(2);
+    expect(again.revision).toBe(2);
   });
 
   it("rejects a stale write with RUN_CONFLICT", async () => {
@@ -719,7 +721,7 @@ export class QueueSupport0002 implements MigrationInterface {
     // Optimistic concurrency: at-least-once delivery lets two consumers load
     // the same run and both pass the resume guards. Without a version, the
     // loser's blind full-row UPDATE silently overwrites the winner.
-    await queryRunner.query(`ALTER TABLE workflow_run ADD COLUMN version integer NOT NULL DEFAULT 1`);
+    await queryRunner.query(`ALTER TABLE workflow_run ADD COLUMN revision integer NOT NULL DEFAULT 1`);
 
     // step_run needs its own tenant for the tenant-scoped claim query the REST
     // API will run; joining to workflow_run for it would defeat the index.
@@ -742,7 +744,7 @@ export class QueueSupport0002 implements MigrationInterface {
     await queryRunner.query(`DROP INDEX IF EXISTS idx_step_run_claim`);
     await queryRunner.query(`CREATE INDEX idx_step_run_claim ON step_run (status, external_service_name, priority)`);
     await queryRunner.query(`ALTER TABLE step_run DROP COLUMN tenant_id`);
-    await queryRunner.query(`ALTER TABLE workflow_run DROP COLUMN version`);
+    await queryRunner.query(`ALTER TABLE workflow_run DROP COLUMN revision`);
   }
 }
 ```
@@ -756,9 +758,14 @@ In `packages/core/src/entities/workflow-run.ts`, add the import and the column:
 ```typescript
 import { VersionColumn } from "typeorm";
 
-  /** Incremented by TypeORM on every save; a stale value makes the UPDATE match zero rows. */
+  /**
+   * Optimistic-lock counter incremented by TypeORM on every save; a stale value
+   * makes the UPDATE match zero rows. Named `revision`, NOT `version`, because
+   * `version` on this entity already holds the workflow definition's version
+   * string and is load-bearing in the executor and the SDK's WorkflowRunLike.
+   */
   @VersionColumn()
-  version!: number;
+  revision!: number;
 ```
 
 In `packages/core/src/entities/step-run.ts`:
