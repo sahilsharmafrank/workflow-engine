@@ -34,26 +34,50 @@ export class ExpressionEvaluator {
     return expression.replace(/workflowState\.stepStates\./g, "workflowState.namedSteps.");
   }
 
+  /**
+   * Classifies the failure so a resource-exhaustion timeout, a malformed stored
+   * expression, and an ordinary runtime error (e.g. a missing property) are
+   * distinguishable in logs rather than all collapsing into one generic code.
+   */
+  private static classify(err: unknown): { code: string; cause: Error } {
+    const cause = err instanceof Error ? err : new Error(String(err));
+    if (/timed out/i.test(cause.message)) {
+      return { code: "EXPRESSION_TIMEOUT", cause };
+    }
+    if (cause.name === "SyntaxError") {
+      return { code: "EXPRESSION_SYNTAX_ERROR", cause };
+    }
+    return { code: "EXPRESSION_EVALUATION_FAILED", cause };
+  }
+
   async evaluate(expression: string, scope: EvaluationScope): Promise<unknown> {
     const context = await this.isolate.createContext();
+    let script: ivm.Script | undefined;
     try {
       const jail = context.global;
-      await jail.set("__workflowState", new ivm.ExternalCopy(scope.workflowState ?? {}).copyInto());
-      await jail.set("__config", new ivm.ExternalCopy(scope.config ?? {}).copyInto());
-      await jail.set("__body", new ivm.ExternalCopy(scope.body ?? undefined).copyInto());
+      await jail.set(
+        "__workflowState",
+        new ivm.ExternalCopy(scope.workflowState ?? {}).copyInto({ release: true })
+      );
+      await jail.set("__config", new ivm.ExternalCopy(scope.config ?? {}).copyInto({ release: true }));
+      await jail.set("__body", new ivm.ExternalCopy(scope.body ?? undefined).copyInto({ release: true }));
 
       const source = `(function (workflowState, config, body) { return (${ExpressionEvaluator.rewrite(
         expression
       )}); })(__workflowState, __config, __body)`;
 
-      const script = await this.isolate.compileScript(source);
+      script = await this.isolate.compileScript(source);
       return await script.run(context, { timeout: this.timeoutMs, copy: true });
     } catch (err) {
-      throw new WfeError(
-        `Failed evaluating expression "${expression}": ${(err as Error).message}`,
-        { statusCode: 400, code: "EXPRESSION_EVALUATION_FAILED", details: { expression } }
-      );
+      const { code, cause } = ExpressionEvaluator.classify(err);
+      throw new WfeError(`Failed evaluating expression "${expression}": ${cause.message}`, {
+        statusCode: 400,
+        code,
+        details: { expression },
+        cause,
+      });
     } finally {
+      script?.release();
       context.release();
     }
   }

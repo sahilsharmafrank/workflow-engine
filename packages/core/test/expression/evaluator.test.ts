@@ -1,4 +1,5 @@
 import { ExpressionEvaluator } from "../../src/expression/evaluator";
+import { WfeError } from "../../src/errors";
 
 describe("ExpressionEvaluator", () => {
   let evaluator: ExpressionEvaluator;
@@ -50,12 +51,23 @@ describe("ExpressionEvaluator", () => {
   });
 
   describe("sandbox isolation", () => {
-    it("has no require", async () => {
-      await expect(evaluator.evaluate('require("fs")', scope)).rejects.toThrow();
+    // `require` is a CommonJS module-local binding, not a global — it is
+    // unreachable from `new Function(...)` too, so a bare `require("fs")` test
+    // would pass whether or not the sandbox actually isolates anything. `Buffer`
+    // and `process`, by contrast, ARE real Node globals visible to code run via
+    // `new Function(...)` in this process, so asserting they are unreachable here
+    // is a differential test: it fails if the isolate is ever swapped back out
+    // for `new Function`.
+    it("has no Buffer (a Node global reachable from new Function, but not from the isolate)", async () => {
+      await expect(evaluator.evaluate("Buffer.from('x')", scope)).rejects.toThrow(
+        /Buffer is not defined/i
+      );
     });
 
     it("has no process", async () => {
-      await expect(evaluator.evaluate("process.env", scope)).rejects.toThrow();
+      await expect(evaluator.evaluate("process.env", scope)).rejects.toThrow(
+        /process is not defined/i
+      );
     });
 
     it("cannot reach the host through constructor walking", async () => {
@@ -72,13 +84,41 @@ describe("ExpressionEvaluator", () => {
     });
 
     it("aborts an infinite loop at the timeout", async () => {
-      await expect(evaluator.evaluate("while (true) {}", scope)).rejects.toThrow();
+      // `while (true) {}` is a statement, not an expression — interpolated into
+      // the evaluator's `return (${expr})` wrapper it is a SyntaxError that
+      // `compileScript` rejects in ~1ms, never reaching `script.run(...)`, so it
+      // would never actually exercise the timeout. Wrapping it in an IIFE puts it
+      // in expression position so the loop really runs and is really killed by
+      // the isolate's `timeout` option (the evaluator's only DoS control over
+      // expressions sourced from database rows).
+      const start = Date.now();
+      await expect(
+        evaluator.evaluate("(function(){ while(true){} })()", scope)
+      ).rejects.toThrow(/timed out/i);
+      const elapsed = Date.now() - start;
+      // A SyntaxError or ReferenceError rejects in a few ms; only an actually-run
+      // and actually-killed loop takes close to the configured 100ms timeout.
+      expect(elapsed).toBeGreaterThanOrEqual(80);
+
+      // The isolate must still be usable after a timeout fires — a timeout is
+      // expected, recoverable behaviour, not isolate-ending damage.
+      await expect(evaluator.evaluate("1 + 1", scope)).resolves.toBe(2);
     }, 10000);
   });
 
   it("throws a WfeError naming the failing expression", async () => {
-    await expect(evaluator.evaluate("workflowState.missing.deep", scope)).rejects.toThrow(
-      /workflowState\.missing\.deep/
-    );
+    const expression = "workflowState.missing.deep";
+    let caught: unknown;
+    try {
+      await evaluator.evaluate(expression, scope);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(WfeError);
+    const error = caught as WfeError;
+    expect(error.statusCode).toBe(400);
+    expect(error.code).toBe("EXPRESSION_EVALUATION_FAILED");
+    expect(error.details).toEqual({ expression });
+    expect(error.message).toMatch(/workflowState\.missing\.deep/);
   });
 });
