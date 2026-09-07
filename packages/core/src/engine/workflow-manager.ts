@@ -55,7 +55,7 @@ export class WorkflowManager {
   protected async lookupDefinition(input: StartWorkflowInput): Promise<WorkflowDefinitionEntity> {
     const found = input.definitionId
       ? await this.definitions.findById(input.tenantId, input.definitionId)
-      : await this.definitions.findLatestPublished(input.tenantId, input.name, input.version);
+      : await this.definitions.findPublished(input.tenantId, input.name, input.version);
 
     if (!found) {
       throw new WfeError(

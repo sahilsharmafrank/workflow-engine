@@ -29,7 +29,11 @@ export class DefinitionRepository {
     return ds.getRepository(WorkflowDefinitionEntity).findOneBy({ id, tenantId });
   }
 
-  async findLatestPublished(
+  // Takes an exact version and cannot resolve a newest one, despite the name
+  // this used to have ("findLatestPublished") — renamed to `findPublished`
+  // since that name is honest about what it does and leaves "latest" free
+  // for a future real latest-version lookup.
+  async findPublished(
     tenantId: string,
     name: string,
     version: string

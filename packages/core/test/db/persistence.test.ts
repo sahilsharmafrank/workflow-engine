@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { WorkflowStatus } from "@wfe/sdk";
+import { DataSource } from "typeorm";
 import { DbContext } from "../../src/db/db-context";
 import { Progress } from "../../src/entities/progress";
 import { StepRun } from "../../src/entities/step-run";
@@ -101,6 +102,34 @@ describe("persistence", () => {
       expect(a).toBe(b);
     } finally {
       await cold.close();
+    }
+  });
+
+  it("retries after a failed initialize instead of caching the rejection forever", async () => {
+    // Against the old code, `dataSourcePromise ??= ...` memoizes the *rejected*
+    // promise once initialize() fails, so every later getDataSource() call on
+    // this instance returns that same rejection until close() is called — even
+    // though the connection would succeed on a retry.
+    const retryable = new DbContext({ dbUrl: container.getConnectionUri(), showSql: false });
+    let calls = 0;
+    const original = DataSource.prototype.initialize;
+    const spy = jest
+      .spyOn(DataSource.prototype, "initialize")
+      .mockImplementation(function (this: DataSource) {
+        calls += 1;
+        if (calls === 1) {
+          return Promise.reject(new Error("simulated initialize failure"));
+        }
+        return original.apply(this);
+      });
+    try {
+      await expect(retryable.getDataSource()).rejects.toThrow("simulated initialize failure");
+      const ds = await retryable.getDataSource();
+      expect(ds.isInitialized).toBe(true);
+      expect(calls).toBe(2);
+    } finally {
+      spy.mockRestore();
+      await retryable.close();
     }
   });
 

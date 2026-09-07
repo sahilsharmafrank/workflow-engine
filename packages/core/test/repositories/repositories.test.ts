@@ -51,7 +51,7 @@ describe("repositories", () => {
       tenantId: "default", name: "wf-c", version: "1.0.0",
       definition: body, status: WorkflowDefinitionStatus.PUBLISHED,
     });
-    const found = await definitions.findLatestPublished("default", "wf-c", "1.0.0");
+    const found = await definitions.findPublished("default", "wf-c", "1.0.0");
     expect(found?.name).toBe("wf-c");
   });
 
@@ -59,7 +59,7 @@ describe("repositories", () => {
     await definitions.create({
       tenantId: "default", name: "wf-d", version: "1.0.0", definition: body,
     });
-    await expect(definitions.findLatestPublished("default", "wf-d", "1.0.0")).resolves.toBeNull();
+    await expect(definitions.findPublished("default", "wf-d", "1.0.0")).resolves.toBeNull();
   });
 
   it("saves a run and reads it back with its steps", async () => {

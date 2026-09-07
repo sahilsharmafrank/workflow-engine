@@ -29,7 +29,13 @@ export class DbContext {
   constructor(private readonly config: EngineConfig) {}
 
   async getDataSource(): Promise<DataSource> {
-    this.dataSourcePromise ??= new DataSource(connectionOptions(this.config)).initialize();
+    // If initialize() rejects, clear the memo so the *next* call gets a fresh
+    // attempt instead of the same cached rejection forever. Concurrent callers
+    // in the meantime still share this one in-flight promise/rejection.
+    this.dataSourcePromise ??= new DataSource(connectionOptions(this.config)).initialize().catch((err) => {
+      this.dataSourcePromise = undefined;
+      throw err;
+    });
     return this.dataSourcePromise;
   }
 
