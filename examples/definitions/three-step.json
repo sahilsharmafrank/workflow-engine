@@ -1,0 +1,46 @@
+{
+  "workflowName": "three-step",
+  "workflowVersion": "1.0.0",
+  "status": "published",
+  "definition": {
+    "steps": [
+      {
+        "stepName": "Prepare",
+        "stepVersion": "1.0.0",
+        "stepType": "core.transform",
+        "stepInputs": [
+          { "targetFieldName": "jobId", "modelEvaluationExpression": "workflowState.inputs.jobId" },
+          { "targetFieldName": "attempt", "modelEvaluationExpression": "Number(1)" }
+        ],
+        "stepStateCapture": [
+          { "targetFieldName": "jobId", "modelEvaluationExpression": "workflowState.stepStates.Prepare.outputs.jobId" }
+        ]
+      },
+      {
+        "stepName": "Check",
+        "stepVersion": "1.0.0",
+        "stepType": "core.transform",
+        "stepInputs": [
+          { "targetFieldName": "label", "modelEvaluationExpression": "String(\"checked\")" },
+          { "targetFieldName": "attempt", "modelEvaluationExpression": "workflowState.stepStates.Prepare.outputs.attempt + 1" }
+        ],
+        "preFlightCheck": {
+          "conditionsToCheck": [
+            { "targetFieldName": "hasJob", "modelEvaluationExpression": "workflowState.state.jobId !== undefined" }
+          ],
+          "actionOnFailure": "skip"
+        }
+      },
+      {
+        "stepName": "Finish",
+        "stepVersion": "1.0.0",
+        "stepType": "core.noop",
+        "stepInputs": [],
+        "stepOutputs": [
+          { "targetFieldName": "finalLabel", "modelEvaluationExpression": "workflowState.stepStates.Check.outputs.label" },
+          { "targetFieldName": "attempts", "modelEvaluationExpression": "workflowState.stepStates.Check.outputs.attempt" }
+        ]
+      }
+    ]
+  }
+}
