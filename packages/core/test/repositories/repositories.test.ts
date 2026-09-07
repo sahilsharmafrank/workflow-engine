@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { WorkflowDefinitionStatus, WorkflowStatus } from "@wfe/sdk";
 import { DbContext } from "../../src/db/db-context";
+import { StepRun } from "../../src/entities/step-run";
 import { WorkflowRun } from "../../src/entities/workflow-run";
 import { DefinitionRepository } from "../../src/repositories/definition-repository";
 import { RunRepository } from "../../src/repositories/run-repository";
@@ -69,9 +70,42 @@ describe("repositories", () => {
     run.currentStep = -1;
     run.status = WorkflowStatus.STARTING;
     run.inputs = { a: 1 };
+    // Create steps in deliberately non-sequential stepNumber order (2, 0, 1)
+    // to verify that @AfterLoad sort runs and eager loading works
+    run.stepRuns = [
+      Object.assign(new StepRun(), {
+        stepNumber: 2,
+        stepName: "step-c",
+        stepType: "action",
+        status: WorkflowStatus.COMPLETE,
+        inputs: { x: 3 },
+        outputs: { y: 4 },
+        state: {},
+      }),
+      Object.assign(new StepRun(), {
+        stepNumber: 0,
+        stepName: "step-a",
+        stepType: "action",
+        status: WorkflowStatus.COMPLETE,
+        inputs: { x: 1 },
+        outputs: { y: 2 },
+        state: {},
+      }),
+      Object.assign(new StepRun(), {
+        stepNumber: 1,
+        stepName: "step-b",
+        stepType: "action",
+        status: WorkflowStatus.COMPLETE,
+        inputs: { x: 2 },
+        outputs: { y: 3 },
+        state: {},
+      }),
+    ];
     const saved = await runs.save(run);
     const found = await runs.findById("default", saved.id!);
     expect(found?.inputs).toEqual({ a: 1 });
+    expect(found?.stepRuns).toHaveLength(3);
+    expect(found?.stepRuns?.map(s => s.stepNumber)).toEqual([0, 1, 2]);
   });
 
   it("does not return a run belonging to another tenant", async () => {
