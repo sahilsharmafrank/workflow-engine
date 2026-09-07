@@ -1,7 +1,12 @@
 import { WorkflowStatus } from "@wfe/sdk";
+import { QueryFailedError } from "typeorm";
 import { DbContext } from "../db/db-context";
 import { WorkflowRun } from "../entities/workflow-run";
 import { WfeError } from "../errors";
+
+// Postgres SQLSTATE for a statement that exceeded `lock_timeout` while
+// waiting on a row lock (`lock_not_available`).
+const PG_LOCK_NOT_AVAILABLE = "55P03";
 
 export class RunRepository {
   constructor(private readonly db: DbContext) {}
@@ -30,6 +35,12 @@ export class RunRepository {
    * transaction before comparing revisions: a second caller's lock
    * acquisition blocks until the first's transaction commits, then observes
    * the bumped revision and is rejected here instead of racing the UPDATE.
+   *
+   * The lock read is bounded by `lock_timeout` (see `DbContext.lockTimeoutMs`):
+   * on a pooled connection, a locker blocked here with no bound would occupy
+   * a pool slot indefinitely under redelivery-driven contention on one run,
+   * stalling unrelated database work sharing the pool. A bounded wait turns
+   * that into a fast, loud failure instead.
    */
   async saveChecked(run: WorkflowRun): Promise<WorkflowRun> {
     const ds = await this.db.getDataSource();
@@ -39,23 +50,49 @@ export class RunRepository {
     }
 
     const expectedRevision = run.revision;
-    return ds.manager.transaction(async (manager) => {
-      // A plain findOne({ lock }) here would pull in the eager stepRuns
-      // relation, and Postgres rejects FOR UPDATE against the nullable side
-      // of that outer join. A raw lookup of just the revision column sidesteps
-      // it while still taking the row lock for the rest of this transaction.
-      const rows = await manager.query<Array<{ revision: number }>>(
-        `SELECT revision FROM workflow_run WHERE id = $1 FOR UPDATE`,
-        [run.id]
-      );
-      if (rows.length === 0 || rows[0].revision !== expectedRevision) {
+    try {
+      return await ds.manager.transaction(async (manager) => {
+        // SET LOCAL only affects this transaction and is reset at commit/rollback.
+        await manager.query(`SET LOCAL lock_timeout = '${this.db.lockTimeoutMs}ms'`);
+
+        // A plain findOne({ lock }) here would pull in the eager stepRuns
+        // relation, and Postgres rejects FOR UPDATE against the nullable side
+        // of that outer join. A raw lookup of just the revision column sidesteps
+        // it while still taking the row lock for the rest of this transaction.
+        // Tenant-scoped like every other repository query: a caller can only
+        // ever hold a WorkflowRun it read through a tenant-scoped path, but
+        // this keeps that guarantee true here too instead of relying on it.
+        const rows = await manager.query<Array<{ revision: number }>>(
+          `SELECT revision FROM workflow_run WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+          [run.id, run.tenantId]
+        );
+        if (rows.length === 0) {
+          // Not a revision conflict: either the run was deleted, or the
+          // caller holds an entity that was never scoped to this tenant.
+          // Distinct from RUN_CONFLICT so a caller doesn't mistake "there was
+          // nothing to race against" for "another writer beat you to it".
+          throw new WfeError(
+            `Workflow run ${run.id} not found for tenant "${run.tenantId}"`,
+            { statusCode: 404, code: "RUN_NOT_FOUND" }
+          );
+        }
+        if (rows[0].revision !== expectedRevision) {
+          throw new WfeError(
+            `Workflow run ${run.id} was modified by another writer; discarding this update`,
+            { statusCode: 409, code: "RUN_CONFLICT" }
+          );
+        }
+        return manager.getRepository(WorkflowRun).save(run);
+      });
+    } catch (err) {
+      if (err instanceof QueryFailedError && (err as unknown as { code?: string }).code === PG_LOCK_NOT_AVAILABLE) {
         throw new WfeError(
-          `Workflow run ${run.id} was modified by another writer; discarding this update`,
-          { statusCode: 409, code: "RUN_CONFLICT" }
+          `Timed out waiting for the lock on workflow run ${run.id}; another writer held it too long`,
+          { statusCode: 503, code: "RUN_LOCK_TIMEOUT", cause: err }
         );
       }
-      return manager.getRepository(WorkflowRun).save(run);
-    });
+      throw err;
+    }
   }
 
   async findById(tenantId: string, id: number): Promise<WorkflowRun | null> {

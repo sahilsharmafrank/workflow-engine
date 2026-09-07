@@ -29,6 +29,11 @@ export class DbContext {
 
   constructor(private readonly config: EngineConfig) {}
 
+  /** Default is applied here, not just in `loadEngineConfig`, so a `DbContext` built directly from a literal (as every test does) still gets a bound instead of an unbounded wait. */
+  get lockTimeoutMs(): number {
+    return this.config.lockTimeoutMs ?? 5000;
+  }
+
   async getDataSource(): Promise<DataSource> {
     // If initialize() rejects, clear the memo so the *next* call gets a fresh
     // attempt instead of the same cached rejection forever. Concurrent callers
