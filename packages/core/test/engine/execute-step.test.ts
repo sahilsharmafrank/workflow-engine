@@ -26,10 +26,28 @@ class ExplodingStep extends BaseStep {
   }
 }
 
+class NoStatusStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    // Deliberately never touches ctx.step.status, mimicking a third-party
+    // step author who forgot to.
+    return { stepState: ctx.step };
+  }
+}
+
+let skipCallCount = 0;
+class SkipCountingStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    skipCallCount += 1;
+    ctx.step.status = WorkflowStatus.COMPLETE;
+    return { stepState: ctx.step };
+  }
+}
+
 describe("RunExecutor.executeStep", () => {
   let container: StartedPostgreSqlContainer;
   let db: DbContext;
   let executor: RunExecutor;
+  let registry: StepRegistry;
   let runs: RunRepository;
   let definitions: DefinitionRepository;
   let evaluator: ExpressionEvaluator;
@@ -40,10 +58,12 @@ describe("RunExecutor.executeStep", () => {
     db = new DbContext(config);
     await db.runMigrations();
 
-    const registry = new StepRegistry();
+    registry = new StepRegistry();
     registerBuiltInSteps(registry);
     registry.register({ type: "test.delaying", version: "1.0.0", factory: (p) => new DelayingStep(p) });
     registry.register({ type: "test.exploding", version: "1.0.0", factory: (p) => new ExplodingStep(p) });
+    registry.register({ type: "test.no-status", version: "1.0.0", factory: (p) => new NoStatusStep(p) });
+    registry.register({ type: "test.skip-counting", version: "1.0.0", factory: (p) => new SkipCountingStep(p) });
 
     evaluator = new ExpressionEvaluator({ timeoutMs: 200 });
     executor = new RunExecutor({ config, db, registry, evaluator });
@@ -93,9 +113,16 @@ describe("RunExecutor.executeStep", () => {
     expect(result.run.state).toEqual({ lastSize: 5 });
   });
 
-  it("skips the step when a pre-flight check fails with SKIP", async () => {
+  it("skips the step when a pre-flight check fails with SKIP, without running it", async () => {
+    // A step type that unconditionally sets COMPLETE (like core.transform)
+    // makes this assertion pass whether or not the SKIP branch actually
+    // returns early — it would pass even against a "SKIP that still runs the
+    // step" bug, since the step's own status write happens to match. Using a
+    // step that counts its own invocations, and asserting that count is
+    // zero, actually proves step.run() was never called.
+    skipCallCount = 0;
     const runId = await startRun("pf-skip", [
-      { stepName: "T", stepVersion: "1.0.0", stepType: "core.transform", stepInputs: [],
+      { stepName: "T", stepVersion: "1.0.0", stepType: "test.skip-counting", stepInputs: [],
         preFlightCheck: {
           conditionsToCheck: [{ targetFieldName: "ok", modelEvaluationExpression: "workflowState.inputs.go === true" }],
           actionOnFailure: PreFlightCheckActionOutcome.SKIP,
@@ -105,6 +132,7 @@ describe("RunExecutor.executeStep", () => {
     const run = await runs.findById("default", runId);
     const result = await executor.executeStep(run!, 0);
     expect(result.run.stepRuns![0].status).toBe(WorkflowStatus.SKIPPED);
+    expect(skipCallCount).toBe(0);
   });
 
   it("runs the step anyway when a pre-flight check fails with CONTINUE", async () => {
@@ -147,6 +175,60 @@ describe("RunExecutor.executeStep", () => {
     const result = await executor.executeStep(run!, 0);
     expect(result.delaySeconds).toBe(30);
     expect(result.run.stepRuns![0].status).toBe(WorkflowStatus.WAITING);
+  });
+
+  it("exposes only allowlisted expressionValues to expressions, and dbUrl is never reachable", async () => {
+    // dbUrl is a sibling field of EngineConfig, not part of expressionValues,
+    // so naming it in expressionConfigKeys must not resurrect access to the
+    // real (credentialed) database connection string.
+    const configuredExecutor = new RunExecutor({
+      config: {
+        dbUrl: container.getConnectionUri(),
+        expressionValues: { greeting: "hello", secretApiKey: "sekret" },
+        expressionConfigKeys: ["greeting", "dbUrl"],
+      },
+      db, registry, evaluator,
+    });
+
+    const runId = await startRun("cfg-1", [
+      { stepName: "T", stepVersion: "1.0.0", stepType: "core.transform",
+        stepInputs: [
+          { targetFieldName: "greeting", modelEvaluationExpression: "config.greeting" },
+          { targetFieldName: "secretApiKey", modelEvaluationExpression: "config.secretApiKey" },
+          { targetFieldName: "dbUrl", modelEvaluationExpression: "config.dbUrl" },
+        ] },
+    ]);
+
+    const run = await runs.findById("default", runId);
+    const result = await configuredExecutor.executeStep(run!, 0);
+    expect(result.run.stepRuns![0].inputs.greeting).toBe("hello");
+    expect(result.run.stepRuns![0].inputs.secretApiKey).toBeUndefined();
+    expect(result.run.stepRuns![0].inputs.dbUrl).toBeUndefined();
+  });
+
+  it("settles a step to COMPLETE when the step itself never sets a terminal status", async () => {
+    // Plan 4 loads arbitrary third-party step plugins, so a step author who
+    // returns without touching ctx.step.status must not leave that row
+    // RUNNING forever while the run moves on and reports success.
+    const runId = await startRun("no-status", [
+      { stepName: "N", stepVersion: "1.0.0", stepType: "test.no-status", stepInputs: [] },
+    ]);
+    const run = await runs.findById("default", runId);
+    const result = await executor.executeStep(run!, 0);
+    expect(result.run.stepRuns![0].status).toBe(WorkflowStatus.COMPLETE);
+  });
+
+  it("throws a WfeError instead of a raw TypeError when the step-run row is missing", async () => {
+    const runId = await startRun("missing-row", [
+      { stepName: "T", stepVersion: "1.0.0", stepType: "core.transform", stepInputs: [] },
+    ]);
+    const run = await runs.findById("default", runId);
+    // Simulate a run whose step-run rows no longer cover this index (e.g. the
+    // definition gained a step while this run was in flight).
+    run!.stepRuns = [];
+    await expect(executor.executeStep(run!, 0)).rejects.toMatchObject({
+      statusCode: 400, code: "STEP_RUN_MISSING",
+    });
   });
 
   it("marks the step FAILED and persists the error message when a step throws", async () => {

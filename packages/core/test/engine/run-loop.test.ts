@@ -13,6 +13,7 @@ import { RunRepository } from "../../src/repositories/run-repository";
 jest.setTimeout(120000);
 
 let runCount = 0;
+let executor: RunExecutor;
 
 class CountingStep extends BaseStep {
   async run(ctx: StepContext): Promise<RunStepResponse> {
@@ -29,10 +30,22 @@ class WaitingStep extends BaseStep {
   }
 }
 
+// Cancels its own run mid-execution, out of band — the way an operator's
+// concurrent cancel() call would race with an in-flight step, but
+// deterministic: the cancel is guaranteed to land before this step (and
+// therefore executeStep's own completion save) returns.
+class CancellingStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    runCount += 1;
+    await executor.cancel(ctx.run.tenantId, ctx.run.id!);
+    ctx.step.status = WorkflowStatus.COMPLETE;
+    return { stepState: ctx.step };
+  }
+}
+
 describe("RunExecutor.run", () => {
   let container: StartedPostgreSqlContainer;
   let db: DbContext;
-  let executor: RunExecutor;
   let runs: RunRepository;
   let definitions: DefinitionRepository;
   let evaluator: ExpressionEvaluator;
@@ -47,6 +60,7 @@ describe("RunExecutor.run", () => {
     registerBuiltInSteps(registry);
     registry.register({ type: "test.counting", version: "1.0.0", factory: (p) => new CountingStep(p) });
     registry.register({ type: "test.waiting", version: "1.0.0", factory: (p) => new WaitingStep(p) });
+    registry.register({ type: "test.cancelling", version: "1.0.0", factory: (p) => new CancellingStep(p) });
 
     evaluator = new ExpressionEvaluator({ timeoutMs: 200 });
     executor = new RunExecutor({ config, db, registry, evaluator });
@@ -163,11 +177,61 @@ describe("RunExecutor.run", () => {
     expect(run.status).toBe(WorkflowStatus.COMPLETE);
   });
 
+  it("stops advancing once a step cancels its own run out of band, and leaves it CANCELLED", async () => {
+    // Against the old code, executeStep's own completion save (and the top
+    // of the next loop iteration) both blindly write the stale in-memory
+    // run's status — RUNNING — clobbering the CANCELLED that cancel() just
+    // wrote to the database. Step 1 (and 2) would then run anyway.
+    const runId = await startRun("loop-7", threeSteps("test.cancelling"));
+    runCount = 0;
+    const run = await executor.start("default", runId);
+    expect(runCount).toBe(1); // only step 0 ran; steps 1 and 2 must not have
+    expect(run.status).toBe(WorkflowStatus.CANCELLED);
+    const reloaded = await runs.findById("default", runId);
+    expect(reloaded!.status).toBe(WorkflowStatus.CANCELLED);
+  });
+
   it("marks a cancelled run CANCELLED and stops advancing it", async () => {
     const runId = await startRun("loop-6", threeSteps("test.waiting"));
     await executor.start("default", runId);
     const cancelled = await executor.cancel("default", runId);
     expect(cancelled.status).toBe(WorkflowStatus.CANCELLED);
+    const reloaded = await runs.findById("default", runId);
+    expect(reloaded!.status).toBe(WorkflowStatus.CANCELLED);
+  });
+
+  it("rejects restartFromStep with an out-of-range step instead of completing having run nothing", async () => {
+    // Against the old code: currentStep is set to 99, the "reached the end"
+    // guard passes (99 === 99), the while(99 < 3) loop body never runs, and
+    // the run is marked COMPLETE having executed zero steps.
+    const runId = await startRun("loop-8", threeSteps("test.counting"));
+    await executor.start("default", runId);
+    runCount = 0;
+    await expect(executor.restartFromStep("default", runId, 99)).rejects.toMatchObject({
+      statusCode: 400, code: "RESTART_STEP_OUT_OF_RANGE",
+    });
+    expect(runCount).toBe(0);
+  });
+
+  it("rejects restartFromStep with a negative step instead of stranding the run in RUNNING", async () => {
+    const runId = await startRun("loop-9", threeSteps("test.counting"));
+    await executor.start("default", runId);
+    await expect(executor.restartFromStep("default", runId, -1)).rejects.toMatchObject({
+      statusCode: 400, code: "RESTART_STEP_OUT_OF_RANGE",
+    });
+  });
+
+  it("refuses to restart a cancelled run", async () => {
+    // Against the old code, restartFromStep unconditionally sets
+    // status = RUNNING, silently overwriting CANCELLED and defeating cancel.
+    const runId = await startRun("loop-10", threeSteps("test.waiting"));
+    await executor.start("default", runId);
+    await executor.cancel("default", runId);
+    runCount = 0;
+    await expect(executor.restartFromStep("default", runId, 0)).rejects.toMatchObject({
+      statusCode: 400, code: "RUN_CANCELLED",
+    });
+    expect(runCount).toBe(0);
     const reloaded = await runs.findById("default", runId);
     expect(reloaded!.status).toBe(WorkflowStatus.CANCELLED);
   });

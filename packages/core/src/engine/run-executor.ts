@@ -2,7 +2,6 @@ import {
   PreFlightCheckActionOutcome, StepContext, StepDefinition, WorkflowStatus, isResumeBlocked, resolveStepType,
 } from "@wfe/sdk";
 import { pick } from "lodash";
-import { StepRun } from "../entities/step-run";
 import { WorkflowRun } from "../entities/workflow-run";
 import { WfeError } from "../errors";
 import { captureParameters } from "../expression/capture";
@@ -13,10 +12,24 @@ export interface ExecuteStepResult {
   delaySeconds?: number;
 }
 
+/** Step statuses executeStep must not overwrite after step.run() returns. */
+const SETTLED_STEP_STATUSES: ReadonlySet<WorkflowStatus> = new Set([
+  WorkflowStatus.COMPLETE,
+  WorkflowStatus.SKIPPED,
+  WorkflowStatus.FAILED,
+  WorkflowStatus.WAITING,
+  WorkflowStatus.CANCELLED,
+]);
+
 export class RunExecutor extends WorkflowManager {
-  /** Only the allowlisted config keys are ever visible to an expression. */
+  /**
+   * Only the allowlisted keys of `expressionValues` are ever visible to an
+   * expression. This is sourced from `expressionValues`, never from `this.config`
+   * itself — dbUrl and every other engine-internal field live on a sibling
+   * property of EngineConfig, so no allowlist entry can ever expose them.
+   */
   protected expressionConfig(): Record<string, unknown> {
-    return pick(this.config as unknown as Record<string, unknown>, this.config.expressionConfigKeys ?? []);
+    return pick(this.config.expressionValues ?? {}, this.config.expressionConfigKeys ?? []);
   }
 
   protected async definitionStepsFor(run: WorkflowRun): Promise<StepDefinition[]> {
@@ -36,7 +49,17 @@ export class RunExecutor extends WorkflowManager {
       });
     }
 
-    const stepRun = run.stepRuns![stepNumber] as StepRun;
+    const stepRun = run.stepRuns?.[stepNumber];
+    if (!stepRun) {
+      // A definition that gained a step while a run created from an earlier
+      // version of it is in flight leaves this run with no matching step-run
+      // row. Full fix (snapshotting the definition onto the run) is deferred;
+      // this at least turns the dereference into a typed 400 instead of a
+      // raw TypeError.
+      throw new WfeError(`Run ${run.id} has no step-run row at index ${stepNumber}`, {
+        statusCode: 400, code: "STEP_RUN_MISSING",
+      });
+    }
     const step = this.registry.create(resolveStepType(stepDefinition), {
       name: stepDefinition.stepName,
       version: stepDefinition.stepVersion,
@@ -85,6 +108,16 @@ export class RunExecutor extends WorkflowManager {
       await step.onBeforeRun(ctx);
       const response = await step.run(ctx);
 
+      // Nothing else enforces that a step reaches a terminal status: a
+      // third-party step that returns without touching ctx.step.status would
+      // otherwise leave this row RUNNING forever while the run moves on.
+      // Only settle it here when the step didn't already choose SKIPPED,
+      // FAILED, WAITING or CANCELLED (or already COMPLETE) for itself, and
+      // isn't suspending via delaySeconds.
+      if (response.delaySeconds === undefined && !SETTLED_STEP_STATUSES.has(stepRun.status)) {
+        stepRun.status = WorkflowStatus.COMPLETE;
+      }
+
       // 4. Capture outputs and state from the post-run run snapshot.
       if (stepDefinition.stepOutputs?.length) {
         const outputs = await captureParameters({
@@ -97,6 +130,17 @@ export class RunExecutor extends WorkflowManager {
           evaluator: this.evaluator, run, expressions: stepDefinition.stepStateCapture, config, body,
         });
         run.state = { ...run.state, ...state };
+      }
+
+      // The step may have cancelled its own run out of band (e.g. via
+      // executor.cancel()) while it was executing. `run` is a stale in-memory
+      // entity — it still holds whatever status the advance loop set before
+      // calling us — so a blind save here would clobber that cancellation
+      // back to RUNNING. Re-read the authoritative status first and, if it
+      // has moved to a resume-blocked state, preserve it instead.
+      const authoritativeStatus = await this.runs.getStatus(run.tenantId, run.id!);
+      if (authoritativeStatus && isResumeBlocked(authoritativeStatus)) {
+        run.status = authoritativeStatus;
       }
 
       const saved = await this.runs.save(run);
@@ -155,6 +199,19 @@ export class RunExecutor extends WorkflowManager {
     let payload = body;
 
     while (nextStep < steps.length) {
+      // Re-read the authoritative status before starting the next step: a
+      // concurrent cancel() writes CANCELLED via its own fresh entity, and
+      // the in-memory `run` here would otherwise blindly overwrite that back
+      // to RUNNING on the next save (TypeORM's save() is a full-row UPDATE).
+      const currentStatus = await this.runs.getStatus(tenantId, runId);
+      if (currentStatus && isResumeBlocked(currentStatus)) {
+        this.log.warn("Stopping run advance: run moved to a resume-blocked state out of band", {
+          runId, stepNumber: nextStep, status: currentStatus,
+        });
+        run.status = currentStatus;
+        return run;
+      }
+
       run.currentStep = nextStep;
       run.status = WorkflowStatus.RUNNING;
       run = await this.runs.save(run);
@@ -196,6 +253,27 @@ export class RunExecutor extends WorkflowManager {
       throw new WfeError(`Cannot locate workflow run ${runId}`, {
         statusCode: 404, code: "RUN_NOT_FOUND",
       });
+    }
+
+    // A cancelled run must stay cancelled: without this, a restart silently
+    // overwrites CANCELLED with RUNNING below, defeating an operator's cancel.
+    if (run.status === WorkflowStatus.CANCELLED) {
+      throw new WfeError(`Run ${runId} is cancelled and cannot be restarted`, {
+        statusCode: 400, code: "RUN_CANCELLED",
+      });
+    }
+
+    const steps = await this.definitionStepsFor(run);
+    if (!Number.isInteger(stepNumber) || stepNumber < 0 || stepNumber >= steps.length) {
+      // Reachable directly from a user-supplied path parameter (PUT
+      // /runs/:id/restart/step/:n). Without this bound check, an out-of-range
+      // stepNumber falls through every guard in run() below and the run is
+      // marked COMPLETE having executed zero steps (or, for a negative
+      // number, stays stranded in RUNNING forever).
+      throw new WfeError(
+        `Run ${runId} has no step at index ${stepNumber} (definition has ${steps.length} step(s))`,
+        { statusCode: 400, code: "RESTART_STEP_OUT_OF_RANGE" }
+      );
     }
 
     for (const step of run.stepRuns ?? []) {
