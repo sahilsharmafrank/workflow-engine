@@ -15,6 +15,7 @@ function context(inputs: Record<string, unknown>): StepContext {
     services: {},
     inputs,
     stepNumber: 0,
+    isResume: false,
     run: {
       tenantId: "default", name: "t", version: "1.0.0", currentStep: 0,
       status: WorkflowStatus.RUNNING, inputs: {}, outputs: {}, state: {},
