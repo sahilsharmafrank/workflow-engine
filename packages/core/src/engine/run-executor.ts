@@ -1,5 +1,5 @@
 import {
-  PreFlightCheckActionOutcome, StepContext, StepDefinition, WorkflowStatus, resolveStepType,
+  PreFlightCheckActionOutcome, StepContext, StepDefinition, WorkflowStatus, isResumeBlocked, resolveStepType,
 } from "@wfe/sdk";
 import { pick } from "lodash";
 import { StepRun } from "../entities/step-run";
@@ -111,5 +111,102 @@ export class RunExecutor extends WorkflowManager {
       });
       throw err;
     }
+  }
+
+  /** Begins execution of a freshly created run at step 0. */
+  async start(tenantId: string, runId: number): Promise<WorkflowRun> {
+    return this.run(tenantId, runId, 0);
+  }
+
+  /**
+   * Advances a run from `stepNumber` until it completes, fails, or suspends.
+   *
+   * Queue delivery is at-least-once, so this is called with stale messages. The
+   * guards below discard those instead of re-running work.
+   */
+  async run(tenantId: string, runId: number, stepNumber: number, body?: unknown): Promise<WorkflowRun> {
+    let run = await this.runs.findById(tenantId, runId);
+    if (!run) {
+      throw new WfeError(`Cannot locate workflow run ${runId}`, {
+        statusCode: 404, code: "RUN_NOT_FOUND",
+      });
+    }
+
+    if (isResumeBlocked(run.status)) {
+      this.log.warn("Discarding resume for a run in a blocked state", {
+        runId, stepNumber, status: run.status,
+      });
+      return run;
+    }
+
+    // -1 means "not started"; any other mismatch is a stale message.
+    if (run.currentStep !== -1 && run.currentStep !== stepNumber) {
+      this.log.warn("Discarding resume for a stale step number", {
+        runId, stepNumber, currentStep: run.currentStep,
+      });
+      return run;
+    }
+
+    const steps = await this.definitionStepsFor(run);
+    let nextStep = stepNumber;
+    let payload = body;
+
+    while (nextStep < steps.length) {
+      run.currentStep = nextStep;
+      run.status = WorkflowStatus.RUNNING;
+      run = await this.runs.save(run);
+
+      const result = await this.executeStep(run, nextStep, payload);
+      run = result.run;
+      payload = undefined; // a callback payload applies only to the step it resumed
+
+      if (result.delaySeconds !== undefined) {
+        run.status = WorkflowStatus.WAITING;
+        return this.runs.save(run);
+      }
+
+      nextStep += 1;
+    }
+
+    run.currentStep = steps.length - 1;
+    run.status = WorkflowStatus.COMPLETE;
+    return this.runs.save(run);
+  }
+
+  /** Marks a run cancelled. In-flight steps are not interrupted. */
+  async cancel(tenantId: string, runId: number): Promise<WorkflowRun> {
+    const run = await this.runs.findById(tenantId, runId);
+    if (!run) {
+      throw new WfeError(`Cannot locate workflow run ${runId}`, {
+        statusCode: 404, code: "RUN_NOT_FOUND",
+      });
+    }
+    run.status = WorkflowStatus.CANCELLED;
+    this.log.info("Cancelled workflow run", { runId, tenantId });
+    return this.runs.save(run);
+  }
+
+  /** Resets the given step and everything after it, then runs from there. */
+  async restartFromStep(tenantId: string, runId: number, stepNumber: number): Promise<WorkflowRun> {
+    const run = await this.runs.findById(tenantId, runId);
+    if (!run) {
+      throw new WfeError(`Cannot locate workflow run ${runId}`, {
+        statusCode: 404, code: "RUN_NOT_FOUND",
+      });
+    }
+
+    for (const step of run.stepRuns ?? []) {
+      if (step.stepNumber >= stepNumber) {
+        step.status = WorkflowStatus.NEW;
+        step.message = undefined;
+        step.outputs = {};
+        step.state = {};
+      }
+    }
+    run.currentStep = stepNumber;
+    run.status = WorkflowStatus.RUNNING;
+    await this.runs.save(run);
+
+    return this.run(tenantId, runId, stepNumber);
   }
 }
