@@ -1,0 +1,16 @@
+{
+  "name": "@wfe/core",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@wfe/sdk": "0.1.0"
+  }
+}
