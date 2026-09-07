@@ -1,5 +1,5 @@
 import { PreFlightCheckActionOutcome, WorkflowDefinitionBody, resolveStepType } from "@wfe/sdk";
-import { array, mixed, object, string } from "yup";
+import { array, mixed, object, string, ValidationError } from "yup";
 import { WfeError } from "../errors";
 import { StepRegistry } from "./step-registry";
 
@@ -35,9 +35,15 @@ export async function validateDefinitionShape(body: unknown): Promise<WorkflowDe
   try {
     return (await definitionSchema.validate(body, { abortEarly: false, stripUnknown: false })) as WorkflowDefinitionBody;
   } catch (err) {
+    const validationError = err as ValidationError;
+    const details = validationError.inner?.map((e) => ({
+      path: e.path,
+      message: e.message,
+    }));
     throw new WfeError(`Invalid workflow definition: ${(err as Error).message}`, {
       statusCode: 400,
       code: "DEFINITION_INVALID",
+      details,
     });
   }
 }
@@ -54,7 +60,16 @@ export function validateAgainstRegistry(body: WorkflowDefinitionBody, registry: 
     }
     seen.add(step.stepName);
 
-    const type = resolveStepType(step);
+    let type: string;
+    try {
+      type = resolveStepType(step);
+    } catch (err) {
+      throw new WfeError(
+        `Step "${step.stepName}" has no stepType or stepClassName`,
+        { statusCode: 400, code: "DEFINITION_MISSING_STEP_TYPE" }
+      );
+    }
+
     if (!registry.has(type)) {
       throw new WfeError(
         `Step "${step.stepName}" references unregistered step type "${type}"`,

@@ -1,5 +1,6 @@
 import { StepRegistry, registerBuiltInSteps } from "../../src/registry/step-registry";
 import { validateAgainstRegistry, validateDefinitionShape } from "../../src/registry/validate";
+import { WfeError } from "../../src/errors";
 
 const valid = {
   steps: [
@@ -59,5 +60,47 @@ describe("definition validation", () => {
     const registry = new StepRegistry();
     registerBuiltInSteps(registry);
     expect(() => validateAgainstRegistry(parsed, registry)).toThrow(/Same/);
+  });
+
+  it("rejects a step missing both stepType and stepClassName with a WfeError", async () => {
+    const parsed = await validateDefinitionShape({
+      steps: [{ stepName: "NoType", stepVersion: "1.0.0", stepInputs: [] }],
+    });
+    const registry = new StepRegistry();
+    registerBuiltInSteps(registry);
+    try {
+      validateAgainstRegistry(parsed, registry);
+      fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WfeError);
+      const wfeErr = err as WfeError;
+      expect(wfeErr.statusCode).toBe(400);
+      expect(wfeErr.code).toBe("DEFINITION_MISSING_STEP_TYPE");
+      expect(wfeErr.message).toMatch(/NoType/);
+    }
+  });
+
+  it("reports detailed per-field errors when shape validation finds multiple problems", async () => {
+    try {
+      await validateDefinitionShape({
+        steps: [
+          {
+            stepName: "", // empty name fails min(1)
+            // stepVersion missing entirely
+            stepInputs: "not an array", // type mismatch
+          },
+        ],
+      });
+      fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WfeError);
+      const wfeErr = err as WfeError;
+      expect(wfeErr.statusCode).toBe(400);
+      expect(wfeErr.code).toBe("DEFINITION_INVALID");
+      // With abortEarly: false, yup collects all errors into details
+      expect(wfeErr.details).toBeDefined();
+      expect(Array.isArray(wfeErr.details)).toBe(true);
+      expect((wfeErr.details as Array<any>).length).toBeGreaterThanOrEqual(3);
+    }
   });
 });
