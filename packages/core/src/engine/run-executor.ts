@@ -139,8 +139,11 @@ export class RunExecutor extends WorkflowManager {
       return run;
     }
 
-    // -1 means "not started"; any other mismatch is a stale message.
-    if (run.currentStep !== -1 && run.currentStep !== stepNumber) {
+    // -1 means "not started"; only stepNumber 0 may start it. Any other
+    // mismatch — including a non-zero stepNumber against an unstarted run —
+    // is a stale or malformed message.
+    const staleStep = run.currentStep === -1 ? stepNumber !== 0 : run.currentStep !== stepNumber;
+    if (staleStep) {
       this.log.warn("Discarding resume for a stale step number", {
         runId, stepNumber, currentStep: run.currentStep,
       });
