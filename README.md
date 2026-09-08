@@ -525,4 +525,6 @@ command.
 | 4 | Plugin loading, built-in step library (http, condition, sub-workflow) |
 | 5 | React UI — definitions, editor, run tracker |
 
-Design and implementation notes live in `docs/superpowers/`.
+Design and implementation notes live in `docs/superpowers/`. To pick this build
+up on another machine, start with [`docs/handoff.md`](docs/handoff.md) — setup,
+the verification rules, and what Phase 3 has to settle first.
