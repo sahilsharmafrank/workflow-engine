@@ -105,14 +105,21 @@ describe("SqsQueueDriver", () => {
     const client = (driver as unknown as { client: SQSClient }).client;
     const realSend = client.send.bind(client) as (...args: unknown[]) => Promise<unknown>;
     let failedOnce = false;
+    const injectedError = new Error("simulated transient failure");
 
     const sendSpy = jest.spyOn(client, "send").mockImplementation(((command: unknown, ...rest: unknown[]) => {
       if (!failedOnce && command instanceof ReceiveMessageCommand) {
         failedOnce = true;
-        return Promise.reject(new Error("simulated transient failure"));
+        return Promise.reject(injectedError);
       }
       return realSend(command, ...rest);
     }) as typeof client.send);
+
+    // The injected failure deliberately drives the driver's console.error
+    // logging path; silence it so suite output stays clean, and assert on
+    // the call so the logging itself — half the point of the fix — is
+    // actually covered rather than merely not-crashing.
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
 
     try {
       const received: WorkflowMessage[] = [];
@@ -123,7 +130,12 @@ describe("SqsQueueDriver", () => {
 
       await stop();
       expect(failedOnce).toBe(true);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('receive failed for queue "work"'),
+        injectedError
+      );
     } finally {
+      errorSpy.mockRestore();
       sendSpy.mockRestore();
     }
   });
