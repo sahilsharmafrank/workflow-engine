@@ -104,18 +104,27 @@ describe("WorkflowWorker", () => {
     expect(executor.resume).not.toHaveBeenCalled();
   });
 
-  it("subscribes to a configured service's queue", async () => {
+  it("never subscribes to a service's dispatch queue (regression guard: the engine must not consume its own outbound external-task dispatch)", async () => {
     const executor = fakeExecutor();
-    const worker = new WorkflowWorker({ executor: executor as never, queue, services: ["billing"] });
+    const worker = new WorkflowWorker({ executor: executor as never, queue });
     await worker.start();
 
-    const serviceMsg: WorkflowMessage = {
+    // Make sure the queue genuinely exists in the driver before publishing,
+    // so a passing test here can't be explained by MemoryQueueDriver simply
+    // never having heard of the queue name.
+    const dispatchQueue = serviceQueueName("billing");
+    await queue.ensureQueues([{ queueName: dispatchQueue }]);
+
+    const dispatchEcho: WorkflowMessage = {
       tenantId: "default", runId: 3, stepNumber: 0, kind: "resume",
     };
-    await queue.publish(serviceQueueName("billing"), serviceMsg);
+    await queue.publish(dispatchQueue, dispatchEcho);
     await queue.drain();
 
-    expect(executor.resume).toHaveBeenCalledWith(serviceMsg);
+    // No subscription means no handler for this queue: drain() must leave
+    // the message exactly where it was, and the executor must never see it.
+    expect(executor.resume).not.toHaveBeenCalled();
+    expect(queue.pending(dispatchQueue)).toEqual([dispatchEcho]);
     await worker.stop();
   });
 

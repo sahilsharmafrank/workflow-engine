@@ -289,9 +289,12 @@ return { stepState: ctx.step, suspend: { kind: "delay", delaySeconds: 45 } };
 ```
 
 **`awaitCallback`** — park until an external worker replies. Name the queue
-the request went to (typically `ctx.step.externalServiceName`) so the reply
-can be routed back; `correlationId` lets the reply be matched to this step.
-This is what `core.externalTask` does:
+the request went to (typically `ctx.step.externalServiceName`); `correlationId`
+lets the reply be matched to this step. The named queue is one-way — the
+engine only ever publishes a dispatch there, it never reads from it (see
+[Running the worker](#running-the-worker)) — so the reply comes back on a
+different channel: `RESPONSE_QUEUE` with `kind: "callback"`, or a direct call
+to `executor.callback(...)`. This is what `core.externalTask` does:
 
 ```ts
 return {
@@ -355,15 +358,15 @@ suspension and one resume.
 
 ### Running the worker
 
-`WorkflowWorker` subscribes to the delay queue, the callback response queue,
-and one queue per external service named in your definitions, and routes each
-message to `executor.resume` or `executor.callback`:
+`WorkflowWorker` subscribes to exactly two queues — the delay queue
+(`DELAY_QUEUE`) and the callback response queue (`RESPONSE_QUEUE`) — and
+routes each message to `executor.resume` or `executor.callback`:
 
 ```ts
 import { WorkflowWorker } from "@wfe/core";
 
-const worker = new WorkflowWorker({ executor, queue, services: ["billing"] });
-await worker.start(); // ensures the delay, response, and wfe-service-billing queues exist, then subscribes to each
+const worker = new WorkflowWorker({ executor, queue });
+await worker.start(); // ensures the delay and response queues exist, then subscribes to both
 // ...
 await worker.stop();
 ```
@@ -371,6 +374,30 @@ await worker.stop();
 It runs as a long-lived process, separate from whatever creates and starts
 runs — that separation is the point: one process can start a run and exit,
 and the worker picks up every delay and callback for it whenever they arrive.
+
+**`WorkflowWorker` never subscribes to a per-service queue
+(`wfe-service-<name>`).** A `core.externalTask` step's suspension publishes
+its dispatch *onto* `wfe-service-<name>` — that queue only ever carries
+requests out to an external service, never replies back to the engine. If
+`WorkflowWorker` also consumed that queue, it would compete with the real
+external consumer for its own dispatch message, "resume" the step with no
+body, and complete it with empty outputs before the external service ever
+saw the request. This is why the two directions use different channels:
+
+- **Outbound (engine → external service):** the engine publishes the
+  dispatch to `wfe-service-<name>`. Something outside `WorkflowWorker` — your
+  own consumer for that service — reads it, does the work, and replies.
+- **Inbound (external service → engine):** the reply comes back either as a
+  message on `RESPONSE_QUEUE` shaped `{ kind: "callback", tenantId, runId,
+  stepNumber, body }` (which `WorkflowWorker` routes to
+  `executor.callback(...)`), or via a direct call to
+  `executor.callback(tenantId, runId, stepNumber, body)` — e.g. from an HTTP
+  callback endpoint, which a future phase adds as `PUT /runs/:id/callback`.
+
+`callback.test.ts` shows this end to end against a bare `MemoryQueueDriver`;
+`external-task-worker.test.ts` shows it with a real `WorkflowWorker` also
+running, and asserts the run stays `waiting` across a drain until the real
+reply arrives.
 
 ### Local Postgres and RabbitMQ
 

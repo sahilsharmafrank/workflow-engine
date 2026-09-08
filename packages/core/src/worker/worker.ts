@@ -2,14 +2,12 @@ import { Logger } from "@wfe/sdk";
 import { RunExecutor } from "../engine/run-executor";
 import { WfeError } from "../errors";
 import { createLogger } from "../logging";
-import { DELAY_QUEUE, RESPONSE_QUEUE, serviceQueueName } from "../queue/names";
+import { DELAY_QUEUE, RESPONSE_QUEUE } from "../queue/names";
 import { QueueDriver, Unsubscribe, WorkflowMessage } from "../queue/types";
 
 export interface WorkflowWorkerDeps {
   executor: RunExecutor;
   queue: QueueDriver;
-  /** External service names whose request queues this worker should also drain. */
-  services?: string[];
   logger?: Logger;
 }
 
@@ -22,19 +20,24 @@ const TERMINAL_CODES = new Set(["RUN_CONFLICT", "RUN_NOT_FOUND", "CALLBACK_STEP_
 export class WorkflowWorker {
   private readonly executor: RunExecutor;
   private readonly queue: QueueDriver;
-  private readonly services: string[];
   private readonly log: Logger;
   private readonly subscriptions: Unsubscribe[] = [];
 
   constructor(deps: WorkflowWorkerDeps) {
     this.executor = deps.executor;
     this.queue = deps.queue;
-    this.services = deps.services ?? [];
     this.log = deps.logger ?? createLogger("workflow-worker");
   }
 
   async start(): Promise<void> {
-    const queues = [DELAY_QUEUE, RESPONSE_QUEUE, ...this.services.map(serviceQueueName)];
+    // Deliberately just these two: a per-service queue (wfe-service-<name>)
+    // only ever carries the engine's OUTBOUND dispatch to an external
+    // consumer. If this worker also subscribed there, it would compete with
+    // that consumer for its own dispatch message and "resume" the step with
+    // no body before any real reply arrived — see the final-review C1
+    // finding. The only inbound channel back to the engine is RESPONSE_QUEUE
+    // (or a direct executor.callback(...) call from outside the worker).
+    const queues = [DELAY_QUEUE, RESPONSE_QUEUE];
     await this.queue.ensureQueues(queues.map((queueName) => ({ queueName })));
 
     for (const queueName of queues) {
