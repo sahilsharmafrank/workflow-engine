@@ -6,35 +6,26 @@ live in git-ignored scratch and do not survive a clean.
 
 ## From Phase 2 (queue drivers)
 
-### The outbound service-request contract is undesigned
+### ~~The outbound service-request contract is undesigned~~ (resolved, Phase 3)
 
-`publishSuspension` sends an `awaitCallback` dispatch to `wfe-service-<name>` as
-a `WorkflowMessage` with `kind: "resume"` and no step inputs. That shape exists
-because core used to consume the queue itself; nothing in core consumes it any
-more. An external service reading that message learns the tenant, run, step and
-correlation id, but nothing about what work to do.
+**Resolution:** The outbound dispatch remains a `WorkflowMessage` with
+`kind: "resume"`, which already carries `tenantId`, `runId`, `stepNumber`,
+and `correlationId`. The step's captured inputs are available to the external
+service via `GET /runs/:id` (which returns the full run including step inputs)
+or by the external service reading the step row directly. The reply path is
+`PUT /runs/:id/callback` (HTTP) or publishing a `kind: "callback"` message
+to `RESPONSE_QUEUE` (queue). A richer request envelope (carrying step inputs
+inline) is a Phase 4 enhancement once real external-task integrations provide
+feedback on what additional fields they need.
 
-Decide what an external consumer actually receives — probably a request envelope
-carrying the step's inputs, distinct from `WorkflowMessage` — and how it replies:
-`RESPONSE_QUEUE` with `kind: "callback"`, or the HTTP callback endpoint.
+### ~~The spec contradicts itself about who consumes service queues~~ (resolved, Phase 3)
 
-**Phase 3 or 4.** Blocks any real external-task integration.
-
-### The spec contradicts itself about who consumes service queues
-
-`docs/superpowers/specs/2026-09-07-standalone-workflow-engine-design.md` lines
-62-63 have the engine publish to the service queue while external workers reply
-on the response queue. Lines 70-71 list "per-service request queues" among the
-engine's three subscriptions, inherited from an older engine's
-`remote-agent-response-listener`.
-
-Phase 2 resolved this in favour of the diagram: `WorkflowWorker` subscribes to
-`DELAY_QUEUE` and `RESPONSE_QUEUE` only. Implementing the other reading — agents
-replying on their own per-service queue — needs a *separate* reply-queue name,
-because one queue cannot carry both directions without the engine consuming its
-own dispatches. That was a real bug, caught in the final whole-branch review.
-
-**Amend the spec** so the next phase does not re-derive this.
+**Resolution:** Spec §3.1 amended to state that `WorkflowWorker` subscribes to
+the delay queue and response queue only. Per-service request queues are outbound:
+the engine publishes to them, external services consume them independently. The
+earlier text listing "per-service request queues" among the engine's subscriptions
+was marked as inherited from the original `remote-agent-response-listener` and
+corrected.
 
 ### pg deprecation warning
 

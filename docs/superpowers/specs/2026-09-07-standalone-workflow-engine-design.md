@@ -66,11 +66,21 @@ POST /runs ──▶ WorkflowManager.startWorkflow()
                                         run() resumes at that step
 ```
 
-Three long-lived subscriptions drive resumption, ported from the current
-`work-delay-listener`, `worker-response-listener` and `remote-agent-response-listener`:
-a delay queue, a worker-response queue, and per-service request queues. The current
-implementations are SQS-specific `while (true)` receive loops; they collapse into one
-generic consumer driven by the `QueueDriver.subscribe` interface.
+Two long-lived subscriptions drive resumption: a **delay queue** and a
+**worker-response queue**. `WorkflowWorker` subscribes to these two only.
+Per-service request queues (`wfe-service-<name>`) are **outbound**: the engine
+publishes to them when an external-task step dispatches work; external services
+consume them independently and reply on the response queue or via
+`PUT /runs/:id/callback`. The engine never reads from a service request queue.
+
+(Amended in Phase 3 planning — Phase 2 resolved the contradiction between the
+original lines 62–63 and 70–71 in favour of the data-flow diagram above. The
+earlier text listing "per-service request queues" among the engine's
+subscriptions was inherited from the original `remote-agent-response-listener`
+description and was incorrect for this design.)
+
+The original implementations are SQS-specific `while (true)` receive loops;
+they collapse into one generic consumer driven by `QueueDriver.subscribe`.
 
 Guards ported verbatim from `work-delay-listener`, because they are the correctness
 core of at-least-once delivery: a resume message is discarded if the run no longer
