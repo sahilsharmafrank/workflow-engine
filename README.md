@@ -50,7 +50,7 @@ packages/core/src
   steps/              built-in steps
   engine/             WorkflowManager (create) + RunExecutor (execute) + suspension planning
   queue/              QueueDriver contract, registry, memory/RabbitMQ/SQS drivers
-  worker/             WorkflowWorker — consumes delay/response/service queues
+  worker/             WorkflowWorker — consumes the delay and response queues
 examples/             runnable examples + sample definitions
 ```
 
