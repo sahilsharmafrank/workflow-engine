@@ -1,6 +1,6 @@
 import { WorkflowStatus } from "@wfe/sdk";
 import { MemoryQueueDriver } from "../../src/queue/memory-driver";
-import { DELAY_QUEUE, RESPONSE_QUEUE } from "../../src/queue/names";
+import { DELAY_QUEUE, RESPONSE_QUEUE, serviceQueueName } from "../../src/queue/names";
 import { WorkflowMessage } from "../../src/queue/types";
 import { WfeError } from "../../src/errors";
 import { WorkflowWorker } from "../../src/worker/worker";
@@ -102,5 +102,30 @@ describe("WorkflowWorker", () => {
     await queue.publish(DELAY_QUEUE, resumeMsg);
     await queue.drain();
     expect(executor.resume).not.toHaveBeenCalled();
+  });
+
+  it("subscribes to a configured service's queue", async () => {
+    const executor = fakeExecutor();
+    const worker = new WorkflowWorker({ executor: executor as never, queue, services: ["billing"] });
+    await worker.start();
+
+    const serviceMsg: WorkflowMessage = {
+      tenantId: "default", runId: 3, stepNumber: 0, kind: "resume",
+    };
+    await queue.publish(serviceQueueName("billing"), serviceMsg);
+    await queue.drain();
+
+    expect(executor.resume).toHaveBeenCalledWith(serviceMsg);
+    await worker.stop();
+  });
+
+  it("tolerates stop() before start() and a second stop() after it", async () => {
+    const worker = new WorkflowWorker({ executor: fakeExecutor() as never, queue });
+
+    await expect(worker.stop()).resolves.toBeUndefined();
+
+    await worker.start();
+    await worker.stop();
+    await expect(worker.stop()).resolves.toBeUndefined();
   });
 });
