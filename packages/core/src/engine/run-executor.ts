@@ -356,6 +356,38 @@ export class RunExecutor extends WorkflowManager {
     return this.run(msg.tenantId, msg.runId, msg.stepNumber, msg.body);
   }
 
+  /**
+   * Applies an external worker's reply to a parked step and resumes the run.
+   * Guarded the same way as any resume: at-least-once delivery means a reply
+   * can arrive twice, or late, or for a run that has since been cancelled.
+   */
+  async callback(
+    tenantId: string, runId: number, stepNumber: number, body: unknown
+  ): Promise<WorkflowRun> {
+    const run = await this.runs.findById(tenantId, runId);
+    if (!run) {
+      throw new WfeError(`Cannot locate workflow run ${runId}`, {
+        statusCode: 404, code: "RUN_NOT_FOUND",
+      });
+    }
+
+    if (isResumeBlocked(run.status)) {
+      this.log.warn("Discarding callback for a run in a blocked state", {
+        runId, stepNumber, status: run.status,
+      });
+      return run;
+    }
+
+    if (run.currentStep !== stepNumber) {
+      throw new WfeError(
+        `Run ${runId} is on step ${run.currentStep}, not ${stepNumber}; discarding callback`,
+        { statusCode: 409, code: "CALLBACK_STEP_MISMATCH" }
+      );
+    }
+
+    return this.run(tenantId, runId, stepNumber, body);
+  }
+
   /** Marks a run cancelled. In-flight steps are not interrupted. */
   async cancel(tenantId: string, runId: number): Promise<WorkflowRun> {
     const run = await this.runs.findById(tenantId, runId);

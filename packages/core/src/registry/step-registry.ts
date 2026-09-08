@@ -1,5 +1,6 @@
 import { BaseStep, StepFactory, StepParams } from "@wfe/sdk";
 import { WfeError } from "../errors";
+import { ExternalTaskStep } from "../steps/external-task-step";
 import { NoopStep } from "../steps/noop-step";
 import { TransformStep } from "../steps/transform-step";
 
@@ -55,5 +56,11 @@ export function registerBuiltInSteps(registry: StepRegistry): void {
     version: "1.0.0",
     description: "Writes its resolved inputs straight to its outputs.",
     factory: (params) => new TransformStep(params),
+  });
+  registry.register({
+    type: "core.externalTask",
+    version: "1.0.0",
+    description: "Dispatches to an external service queue and waits for its callback.",
+    factory: (params) => new ExternalTaskStep(params),
   });
 }
