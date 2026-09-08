@@ -1,0 +1,34 @@
+{
+  "workflowName": "delayed",
+  "workflowVersion": "1.0.0",
+  "status": "published",
+  "definition": {
+    "steps": [
+      {
+        "stepName": "Prepare",
+        "stepVersion": "1.0.0",
+        "stepType": "core.transform",
+        "stepInputs": [
+          { "targetFieldName": "jobId", "modelEvaluationExpression": "workflowState.inputs.jobId" }
+        ]
+      },
+      {
+        "stepName": "Wait",
+        "stepVersion": "1.0.0",
+        "stepType": "core.delay",
+        "stepInputs": [
+          { "targetFieldName": "seconds", "modelEvaluationExpression": "Number(45)" }
+        ]
+      },
+      {
+        "stepName": "Finish",
+        "stepVersion": "1.0.0",
+        "stepType": "core.noop",
+        "stepInputs": [],
+        "stepOutputs": [
+          { "targetFieldName": "jobId", "modelEvaluationExpression": "workflowState.stepStates.Prepare.outputs.jobId" }
+        ]
+      }
+    ]
+  }
+}

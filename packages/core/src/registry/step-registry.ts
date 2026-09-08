@@ -1,5 +1,6 @@
 import { BaseStep, StepFactory, StepParams } from "@wfe/sdk";
 import { WfeError } from "../errors";
+import { DelayStep } from "../steps/delay-step";
 import { ExternalTaskStep } from "../steps/external-task-step";
 import { NoopStep } from "../steps/noop-step";
 import { TransformStep } from "../steps/transform-step";
@@ -62,5 +63,11 @@ export function registerBuiltInSteps(registry: StepRegistry): void {
     version: "1.0.0",
     description: "Dispatches to an external service queue and waits for its callback.",
     factory: (params) => new ExternalTaskStep(params),
+  });
+  registry.register({
+    type: "core.delay",
+    version: "1.0.0",
+    description: "Suspends the run for a number of seconds, then completes.",
+    factory: (params) => new DelayStep(params),
   });
 }

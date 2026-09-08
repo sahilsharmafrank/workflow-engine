@@ -13,8 +13,13 @@ be advanced by another — there is no in-memory run state to lose.
 sandboxed expression evaluator, a step registry, definition validation, and an
 advance loop with at-least-once resume guards.
 
-Not built yet: queue drivers (SQS/RabbitMQ), the REST API, plugin loading, and the
-UI. See [Roadmap](#roadmap).
+**Phase 2: queue drivers.** Pluggable queue drivers (in-memory, RabbitMQ, SQS)
+behind a registry, delay and callback suspension with delay chaining past a
+driver's own limit, and a `WorkflowWorker` that resumes runs from a queue. See
+[Queues](#queues).
+
+Not built yet: the REST API, plugin loading, and the UI. See
+[Roadmap](#roadmap).
 
 ## Requirements
 
@@ -43,8 +48,10 @@ packages/core/src
   repositories/       tenant-scoped data access
   registry/           step registry + definition validation
   steps/              built-in steps
-  engine/             WorkflowManager (create) + RunExecutor (execute)
-examples/             runnable example + sample definition
+  engine/             WorkflowManager (create) + RunExecutor (execute) + suspension planning
+  queue/              QueueDriver contract, registry, memory/RabbitMQ/SQS drivers
+  worker/             WorkflowWorker — consumes delay/response/service queues
+examples/             runnable examples + sample definitions
 ```
 
 ## Running locally
@@ -211,6 +218,8 @@ in this phase.
 |---|---|
 | `core.noop` | Completes immediately, produces no outputs. |
 | `core.transform` | Writes its resolved inputs straight to its outputs — moves and renames values with no code. |
+| `core.delay` | Suspends the run for its `seconds` input, then completes. See [Queues](#queues). |
+| `core.externalTask` | Dispatches to an external service's queue and waits for its callback. See [Queues](#queues). |
 
 ## Writing a step
 
@@ -218,7 +227,19 @@ in this phase.
 import { BaseStep, RunStepResponse, StepContext, WorkflowStatus } from "@wfe/sdk";
 
 export class GreetStep extends BaseStep {
+  /** Runs once, only on first entry — never on a resume. Good place to
+   * dispatch a request whose reply the step will later wait for. */
+  async start(ctx: StepContext): Promise<void> {
+    ctx.logger.info("greeting", { name: ctx.inputs.name });
+  }
+
   async run(ctx: StepContext): Promise<RunStepResponse> {
+    if (ctx.isResume) {
+      // Re-entered after a suspension (a delay elapsing, or a callback
+      // arriving as ctx.body). Nothing to resume here, so just complete.
+      ctx.step.status = WorkflowStatus.COMPLETE;
+      return { stepState: ctx.step };
+    }
     ctx.step.outputs = { greeting: `hello ${ctx.inputs.name}` };
     ctx.step.status = WorkflowStatus.COMPLETE;
     return { stepState: ctx.step };
@@ -242,9 +263,129 @@ const executor = new RunExecutor({ config, db, registry, evaluator, services: { 
 // inside a step: (ctx.services.billing as BillingClient).charge(...)
 ```
 
-To suspend a step rather than complete it, return `delaySeconds`. The run is
-marked `waiting` and the loop stops; the queue driver that resumes it arrives in
-Phase 2.
+To suspend a step rather than complete it, return `suspend` instead of leaving
+it unset. The run is marked `waiting` and the loop stops; a queue driver
+publishes the message that resumes it. See [Queues](#queues).
+
+## Queues
+
+Phase 2 makes a step's suspension durable: instead of blocking a process, the
+executor publishes a message to a queue and returns. Something consuming that
+queue — usually a `WorkflowWorker` — resumes the run later, possibly from a
+different process entirely.
+
+### Suspension modes
+
+A step chooses how it suspends by what it returns from `run()`. There is no
+`suspend` field for "just complete" — that's the default when a step returns
+without one, as `GreetStep` and every built-in step but `core.delay` and
+`core.externalTask` do above. The two ways to actually suspend:
+
+**`delay`** — sleep for a fixed period, then resume with no payload. This is
+what `core.delay` does:
+
+```ts
+return { stepState: ctx.step, suspend: { kind: "delay", delaySeconds: 45 } };
+```
+
+**`awaitCallback`** — park until an external worker replies. Name the queue
+the request went to (typically `ctx.step.externalServiceName`) so the reply
+can be routed back; `correlationId` lets the reply be matched to this step.
+This is what `core.externalTask` does:
+
+```ts
+return {
+  stepState: ctx.step,
+  suspend: {
+    kind: "awaitCallback",
+    queue: ctx.step.externalServiceName,
+    correlationId: `${ctx.run.id}:${ctx.stepNumber}`,
+  },
+};
+```
+
+Either way, the step re-enters with `ctx.isResume === true` on resumption — a
+delay resume carries no body, a callback resume carries the reply as
+`ctx.body`.
+
+### Selecting a driver
+
+Drivers are registered in a global registry by name and constructed through
+it, so the executor and worker never import a broker client directly:
+
+```ts
+import { createQueueDriver, listQueueDrivers } from "@wfe/core";
+
+listQueueDrivers(); // ["memory"] until a broker driver is imported — see below
+
+const queue = createQueueDriver(process.env.WFE_QUEUE_DRIVER ?? "memory", {
+  url: process.env.WFE_QUEUE_URL,     // rabbitmq: required, e.g. amqp://localhost
+  prefix: process.env.WFE_SQS_PREFIX, // sqs: physical queue name prefix, defaults to "wfe"
+  region: process.env.AWS_REGION,     // sqs: also read directly by the SDK client if omitted here
+});
+```
+
+`memory` (`MemoryQueueDriver`) is registered by importing `@wfe/core` itself —
+it has no external dependency, so it's always available and is what the
+in-process examples and tests use. `rabbitmq` and `sqs` are **not** exported
+from `@wfe/core`'s barrel: importing either driver module pulls in `amqplib`
+or the AWS SDK and registers the driver as a side effect, so a memory-only
+deployment never has to carry either broker client. Import the one you want
+explicitly, once, before calling `createQueueDriver`:
+
+```ts
+import "@wfe/core/dist/queue/rabbitmq-driver"; // registers "rabbitmq"
+import "@wfe/core/dist/queue/sqs-driver";      // registers "sqs"
+```
+
+### Delay chaining
+
+Every driver caps how long a single message can be delayed —
+`MemoryQueueDriver` and `RabbitMqQueueDriver` at 900s, `SqsQueueDriver` at
+SQS's own 900s native limit. A step can still ask for far longer (a 30-day
+delay is `delaySeconds: 2_592_000`): the executor, not the driver, is
+responsible for making that work. `planSuspension` (`engine/suspension.ts`)
+splits the request into a first hop of at most `driver.maxDelaySeconds` and a
+`remainingDelaySeconds` carried on the message; `RunExecutor.resume` sees the
+remainder on the incoming message and republishes another hop instead of
+running the step, until the remainder reaches zero and the step actually
+resumes. A 30-day delay on a 900s-capped driver is therefore ~2,880 silent
+hops of 900s each — invisible to the step, which only ever sees one
+suspension and one resume.
+
+### Running the worker
+
+`WorkflowWorker` subscribes to the delay queue, the callback response queue,
+and one queue per external service named in your definitions, and routes each
+message to `executor.resume` or `executor.callback`:
+
+```ts
+import { WorkflowWorker } from "@wfe/core";
+
+const worker = new WorkflowWorker({ executor, queue, services: ["billing"] });
+await worker.start(); // ensures the delay, response, and wfe-service-billing queues exist, then subscribes to each
+// ...
+await worker.stop();
+```
+
+It runs as a long-lived process, separate from whatever creates and starts
+runs — that separation is the point: one process can start a run and exit,
+and the worker picks up every delay and callback for it whenever they arrive.
+
+### Local Postgres and RabbitMQ
+
+`docker-compose.yml` brings up both:
+
+```bash
+docker compose up -d
+docker compose down
+```
+
+Postgres is exposed on `5432` with the same credentials as the
+[Running locally](#running-locally) section; RabbitMQ's AMQP port is `5672`
+and its management UI is at `http://localhost:15672` (`guest`/`guest`). Port
+`5432` is just as likely to already be taken here as it is for `docker run` —
+see **Port 5432 already in use** under [Troubleshooting](#troubleshooting).
 
 ## Embedding the engine
 
@@ -352,7 +493,7 @@ command.
 | Phase | Scope |
 |---|---|
 | 1 ✅ | Engine core — this repo |
-| 2 | Queue drivers (SQS, RabbitMQ), delayed and callback-resumed steps |
+| 2 ✅ | Queue drivers (SQS, RabbitMQ), delayed and callback-resumed steps — this repo |
 | 3 | REST API, OpenAPI, CLI, Docker Compose |
 | 4 | Plugin loading, built-in step library (http, condition, sub-workflow) |
 | 5 | React UI — definitions, editor, run tracker |

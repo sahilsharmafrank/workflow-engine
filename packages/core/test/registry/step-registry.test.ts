@@ -52,7 +52,9 @@ describe("StepRegistry", () => {
   it("lists registrations", () => {
     const registry = new StepRegistry();
     registerBuiltInSteps(registry);
-    expect(registry.list().map((r) => r.type).sort()).toEqual(["core.externalTask", "core.noop", "core.transform"]);
+    expect(registry.list().map((r) => r.type).sort()).toEqual([
+      "core.delay", "core.externalTask", "core.noop", "core.transform",
+    ]);
   });
 
   it("core.transform copies resolved inputs to outputs and completes", async () => {
