@@ -284,6 +284,39 @@ describe("executor queue integration", () => {
     expect(runCount).toBe(1);
   });
 
+  it("discards a stale chained-delay hop once the run has moved past that step", async () => {
+    // Step 0's delay is long enough to chain (2000s > the 900s driver cap);
+    // step 1's is short enough to resolve in a single hop. Both suspend the
+    // run without landing it in a resume-blocked status, so the only thing
+    // that can catch a stale hop for step 0 after the run has moved to step
+    // 1 is the currentStep guard itself.
+    const runId = await startRun("q-10", ["test.long-sleep", "test.sleep", "test.counting"]);
+    const started = await executor.start("default", runId);
+    expect(started.status).toBe(WorkflowStatus.WAITING);
+    expect(started.currentStep).toBe(0);
+
+    const forRun = () => queue.pending(DELAY_QUEUE).filter((m) => m.runId === runId);
+    const stale = forRun().find((m) => m.stepNumber === 0)!;
+    expect(stale.remainingDelaySeconds).toBe(1100);
+
+    // Move the run onto a later step while step 0's chained delay is still
+    // in flight — the same shape restartFromStep produces mid-chain. The run
+    // lands WAITING (on step 1's own delay), not in any resume-blocked
+    // status, so the existing isResumeBlocked() check alone cannot discard
+    // the stale step-0 hop below.
+    const restarted = await executor.restartFromStep("default", runId, 1);
+    expect(restarted.status).toBe(WorkflowStatus.WAITING);
+    expect(restarted.currentStep).toBe(1);
+
+    await executor.resume(stale);
+
+    // No new hop may ever be published for the abandoned step 0: only the
+    // original (never-dequeued) message should remain.
+    const staleHopsAfter = forRun().filter((m) => m.stepNumber === 0);
+    expect(staleHopsAfter).toHaveLength(1);
+    expect(staleHopsAfter[0].remainingDelaySeconds).toBe(1100);
+  });
+
   it("keeps a concurrently cancelled run CANCELLED when the step that raced it then throws", async () => {
     const runId = await startRun("q-8", ["test.cancel-then-throw"]);
     await expect(executor.start("default", runId)).rejects.toThrow(/boom after cancel/);

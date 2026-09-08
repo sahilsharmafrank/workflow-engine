@@ -347,6 +347,18 @@ export class RunExecutor extends WorkflowManager {
         });
         return run;
       }
+      // Mirrors run()'s stale-step guard exactly (including the -1 special
+      // case): without it, a run moved on (e.g. by restartFromStep) while a
+      // long chained delay for the abandoned step is still in flight would
+      // keep re-publishing hops for that step until the chain finally
+      // reaches zero, where run()'s own guard would discard it anyway.
+      const staleStep = run.currentStep === -1 ? msg.stepNumber !== 0 : run.currentStep !== msg.stepNumber;
+      if (staleStep) {
+        this.log.warn("Discarding chained delay for a stale step number", {
+          runId: msg.runId, stepNumber: msg.stepNumber, currentStep: run.currentStep,
+        });
+        return run;
+      }
       await this.publishSuspension(
         run, msg.stepNumber, { kind: "delay", delaySeconds: msg.remainingDelaySeconds }, msg.remainingDelaySeconds
       );
