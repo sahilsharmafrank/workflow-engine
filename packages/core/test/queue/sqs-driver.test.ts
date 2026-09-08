@@ -1,3 +1,4 @@
+import { ReceiveMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { LocalstackContainer, StartedLocalStackContainer } from "@testcontainers/localstack";
 import { SqsQueueDriver } from "../../src/queue/sqs-driver";
 import { WorkflowMessage } from "../../src/queue/types";
@@ -92,5 +93,38 @@ describe("SqsQueueDriver", () => {
     await eventually(() => attempts >= 2, 60000);
 
     await stop();
+  });
+
+  it("keeps the subscription alive after a transient (non-abort) receive failure", async () => {
+    // Reach into the driver's real SQS client and make its very first
+    // ReceiveMessageCommand reject with a plain error, then fall through to
+    // the real implementation for everything after. This proves a transient
+    // failure (throttling, network blip, bad credentials, ...) does not
+    // permanently kill the subscription — only an aborted receive should do
+    // that.
+    const client = (driver as unknown as { client: SQSClient }).client;
+    const realSend = client.send.bind(client) as (...args: unknown[]) => Promise<unknown>;
+    let failedOnce = false;
+
+    const sendSpy = jest.spyOn(client, "send").mockImplementation(((command: unknown, ...rest: unknown[]) => {
+      if (!failedOnce && command instanceof ReceiveMessageCommand) {
+        failedOnce = true;
+        return Promise.reject(new Error("simulated transient failure"));
+      }
+      return realSend(command, ...rest);
+    }) as typeof client.send);
+
+    try {
+      const received: WorkflowMessage[] = [];
+      const stop = await driver.subscribe("work", async (m) => { received.push(m); });
+
+      await driver.publish("work", msg(4));
+      await eventually(() => received.some((m) => m.runId === 4), 30000);
+
+      await stop();
+      expect(failedOnce).toBe(true);
+    } finally {
+      sendSpy.mockRestore();
+    }
   });
 });

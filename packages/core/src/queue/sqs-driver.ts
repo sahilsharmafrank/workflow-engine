@@ -1,9 +1,34 @@
 import {
   CreateQueueCommand, DeleteMessageCommand, GetQueueUrlCommand,
-  ReceiveMessageCommand, SendMessageCommand, SQSClient,
+  ReceiveMessageCommand, SendMessageCommand, SQSClient, SQSClientConfig,
 } from "@aws-sdk/client-sqs";
 import { registerQueueDriver } from "./registry";
 import { QueueDefinition, QueueDriver, QueueDriverOptions, Unsubscribe, WorkflowMessage } from "./types";
+
+/** Pause between receive retries after a non-abort failure, so a persistently
+ * failing endpoint (throttling, network blip, bad credentials, ...) cannot
+ * hot-spin the loop. */
+const RECEIVE_RETRY_DELAY_MS = 1000;
+
+/** Resolves after `ms`, or immediately if `signal` aborts first — so a pause
+ * never outlives an in-flight `unsubscribe`/`close`. */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 export class SqsQueueDriver implements QueueDriver {
   readonly name = "sqs";
@@ -14,6 +39,7 @@ export class SqsQueueDriver implements QueueDriver {
   private readonly prefix: string;
   private readonly urls = new Map<string, string>();
   private readonly abortControllers = new Set<AbortController>();
+  private readonly loopPromises = new Set<Promise<void>>();
   private stopped = false;
 
   constructor(options: QueueDriverOptions) {
@@ -21,7 +47,9 @@ export class SqsQueueDriver implements QueueDriver {
     this.client = new SQSClient({
       region: (options.region as string) ?? process.env.AWS_REGION,
       ...(options.endpoint ? { endpoint: options.endpoint as string } : {}),
-      ...(options.credentials ? { credentials: options.credentials as never } : {}),
+      ...(options.credentials
+        ? { credentials: options.credentials as SQSClientConfig["credentials"] }
+        : {}),
     });
   }
 
@@ -85,10 +113,18 @@ export class SqsQueueDriver implements QueueDriver {
             }),
             { abortSignal: abortController.signal }
           );
-        } catch {
-          // Aborted by unsubscribe/close while long-polling: exit quietly
-          // rather than let a stale loop keep competing for messages.
-          return;
+        } catch (err) {
+          if (abortController.signal.aborted) {
+            // Aborted by unsubscribe/close while long-polling: exit quietly
+            // rather than let a stale loop keep competing for messages.
+            return;
+          }
+          // A real failure (throttling, network blip, bad credentials, ...):
+          // the subscription must not die silently. Log and keep polling
+          // after a fixed pause, rather than hot-spinning the endpoint.
+          console.error(`sqs-driver: receive failed for queue "${queue}"`, err);
+          await abortableDelay(RECEIVE_RETRY_DELAY_MS, abortController.signal);
+          continue;
         }
         for (const message of received.Messages ?? []) {
           if (!message.Body) continue;
@@ -106,16 +142,21 @@ export class SqsQueueDriver implements QueueDriver {
       }
     };
 
-    const loopPromise = loop();
+    // Awaiting the loop's promise (rather than just flipping `running`)
+    // guarantees the loop has actually exited before the caller subscribes
+    // again on the same queue — otherwise a still-in-flight receive can
+    // steal and delete a message meant for the next subscriber. Tracked in
+    // `loopPromises` too, so `close()` can offer the same guarantee for
+    // callers that skip individual `unsubscribe()` calls.
+    const loopPromise = loop().finally(() => {
+      this.abortControllers.delete(abortController);
+      this.loopPromises.delete(loopPromise);
+    });
+    this.loopPromises.add(loopPromise);
 
-    // Awaiting here (rather than just flipping `running`) guarantees the
-    // loop has actually exited before the caller subscribes again on the
-    // same queue — otherwise a still-in-flight receive can steal and delete
-    // a message meant for the next subscriber.
     return async () => {
       running = false;
       abortController.abort();
-      this.abortControllers.delete(abortController);
       await loopPromise;
     };
   }
@@ -125,6 +166,7 @@ export class SqsQueueDriver implements QueueDriver {
     for (const controller of this.abortControllers) {
       controller.abort();
     }
+    await Promise.all(this.loopPromises);
     this.client.destroy();
   }
 }
