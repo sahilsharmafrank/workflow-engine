@@ -50,12 +50,12 @@ describe("RabbitMqQueueDriver", () => {
 
     await driver.publish("work", {
       tenantId: "t1", runId: 7, stepNumber: 3, kind: "callback",
-      body: { receiptId: "r-1" }, correlationId: "7:3", attempt: 120,
+      body: { receiptId: "r-1" }, correlationId: "7:3", attempt: 120, remainingDelaySeconds: 45,
     });
     await eventually(() => received.length === 1);
     expect(received[0]).toEqual({
       tenantId: "t1", runId: 7, stepNumber: 3, kind: "callback",
-      body: { receiptId: "r-1" }, correlationId: "7:3", attempt: 120,
+      body: { receiptId: "r-1" }, correlationId: "7:3", attempt: 120, remainingDelaySeconds: 45,
     });
 
     await stop();
@@ -91,10 +91,14 @@ describe("RabbitMqQueueDriver", () => {
   it("stops delivering after unsubscribe", async () => {
     const received: WorkflowMessage[] = [];
     const stop = await driver.subscribe("work", async (m) => { received.push(m); });
-    await stop();
 
     await driver.publish("work", msg(4));
+    await eventually(() => received.length === 1);
+
+    await stop();
+
+    await driver.publish("work", msg(5));
     await new Promise((r) => setTimeout(r, 2000));
-    expect(received).toHaveLength(0);
+    expect(received).toHaveLength(1);
   });
 });
