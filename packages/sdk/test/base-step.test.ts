@@ -86,6 +86,21 @@ class SuspendingStep extends BaseStep {
   }
 }
 
+class AwaitCallbackStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    if (!ctx.isResume) {
+      ctx.step.status = WorkflowStatus.WAITING;
+      return {
+        stepState: ctx.step,
+        suspend: { kind: "awaitCallback", queue: "billing", correlationId: "abc" },
+      };
+    }
+    ctx.step.status = WorkflowStatus.COMPLETE;
+    ctx.step.outputs = (ctx.body as Record<string, unknown>) ?? {};
+    return { stepState: ctx.step };
+  }
+}
+
 describe("suspension model", () => {
   const params: StepParams = { name: "S", version: "1.0.0", type: "test.suspending" };
 
@@ -119,8 +134,20 @@ describe("suspension model", () => {
   });
 
   it("expresses an await-callback suspension", async () => {
-    const suspension = { kind: "awaitCallback", queue: "billing", correlationId: "abc" } as const;
-    expect(suspension.kind).toBe("awaitCallback");
+    const step = new AwaitCallbackStep(params);
+    const response = await step.run(ctx(false));
+    expect(response.suspend).toEqual({ kind: "awaitCallback", queue: "billing", correlationId: "abc" });
+    expect(response.stepState.status).toBe(WorkflowStatus.WAITING);
+  });
+
+  it("completes with the callback body on resume", async () => {
+    const step = new AwaitCallbackStep(params);
+    const resumeCtx = ctx(true);
+    resumeCtx.body = { receiptId: "rcpt-1" };
+    const response = await step.run(resumeCtx);
+    expect(response.suspend).toBeUndefined();
+    expect(response.stepState.status).toBe(WorkflowStatus.COMPLETE);
+    expect(response.stepState.outputs).toEqual({ receiptId: "rcpt-1" });
   });
 
   it("provides a no-op start hook by default", async () => {
