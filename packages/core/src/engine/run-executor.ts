@@ -43,6 +43,24 @@ export class RunExecutor extends WorkflowManager {
     return definition.definition.steps;
   }
 
+  /**
+   * Saves `run`, unless another writer already committed a halting status
+   * while this step was in flight. That write is already the authoritative
+   * state: a plain save here would clobber it, and `saveChecked` would
+   * spuriously conflict against it (this entity's revision predates that
+   * write) — so this reconciles `run.status` in memory and returns without
+   * writing again instead. Used by every non-error return out of
+   * `executeStep` that would otherwise call `saveChecked` directly.
+   */
+  protected async saveUnlessResumeBlocked(run: WorkflowRun): Promise<WorkflowRun> {
+    const authoritativeStatus = await this.runs.getStatus(run.tenantId, run.id!);
+    if (authoritativeStatus && isResumeBlocked(authoritativeStatus)) {
+      run.status = authoritativeStatus;
+      return run;
+    }
+    return this.runs.saveChecked(run);
+  }
+
   async executeStep(run: WorkflowRun, stepNumber: number, body?: unknown): Promise<ExecuteStepResult> {
     const steps = await this.definitionStepsFor(run);
     const stepDefinition = steps[stepNumber];
@@ -97,8 +115,8 @@ export class RunExecutor extends WorkflowManager {
           if (actionOnFailure === PreFlightCheckActionOutcome.SKIP) {
             stepRun.status = WorkflowStatus.SKIPPED;
             stepRun.message = message;
-            await this.runs.saveChecked(run);
-            return { run };
+            const saved = await this.saveUnlessResumeBlocked(run);
+            return { run: saved };
           }
           stepRun.message = message; // CONTINUE
         }
@@ -148,24 +166,33 @@ export class RunExecutor extends WorkflowManager {
       // executor.cancel()) while it was executing. `run` is a stale in-memory
       // entity — it still holds whatever status the advance loop set before
       // calling us — so a blind save here would clobber that cancellation
-      // back to RUNNING. Re-read the authoritative status first and, if it
-      // has moved to a resume-blocked state, preserve it instead.
-      const authoritativeStatus = await this.runs.getStatus(run.tenantId, run.id!);
-      if (authoritativeStatus && isResumeBlocked(authoritativeStatus)) {
-        // Another writer (e.g. an operator's cancel()) already committed a
-        // halting status while this step was running, on its own fresh
-        // entity — this `run`'s revision predates that write. saveChecked
-        // would spuriously conflict against it, and losing that race would
-        // fall into the catch block below and clobber the correct status
-        // with FAILED. That write already persisted the authoritative state,
-        // so just reconcile in memory and return without writing again.
-        run.status = authoritativeStatus;
-        return { run, suspend: response.suspend };
-      }
-
-      const saved = await this.runs.saveChecked(run);
+      // back to RUNNING. saveUnlessResumeBlocked re-reads the authoritative
+      // status first and, if it has moved to a resume-blocked state,
+      // reconciles instead of writing.
+      const saved = await this.saveUnlessResumeBlocked(run);
       return { run: saved, suspend: response.suspend };
     } catch (err) {
+      // Two families of error reach here besides a genuine step failure:
+      // saveUnlessResumeBlocked's saveChecked (from either call site above)
+      // can itself throw RUN_CONFLICT (another writer won the race) or
+      // RUN_LOCK_TIMEOUT (the row was contended too long) — both meant to be
+      // retried by the caller, not buried under a fabricated FAILED. And even
+      // for an unrelated step error, another writer may have already
+      // committed a halting status (e.g. a concurrent cancel()) while the
+      // step was running; a plain save() below would otherwise clobber that
+      // already-persisted state, defeating the operator's cancel and — since
+      // restartFromStep only refuses CANCELLED — making the clobbered run
+      // look restartable. Check both before writing.
+      const isSaveConflict = err instanceof WfeError
+        && (err.code === "RUN_CONFLICT" || err.code === "RUN_LOCK_TIMEOUT");
+      const authoritativeStatus = await this.runs.getStatus(run.tenantId, run.id!);
+      if (isSaveConflict || (authoritativeStatus && isResumeBlocked(authoritativeStatus))) {
+        this.log.warn("Not persisting FAILED: the run was concurrently modified or a checked save could not complete", {
+          runId: run.id, stepNumber, status: authoritativeStatus, error: (err as Error).message,
+        });
+        throw err;
+      }
+
       stepRun.status = WorkflowStatus.FAILED;
       stepRun.message = (err as Error).message;
       run.status = WorkflowStatus.FAILED;
@@ -241,6 +268,19 @@ export class RunExecutor extends WorkflowManager {
       payload = undefined; // a callback payload applies only to the step it resumed
 
       if (result.suspend) {
+        // executeStep's own saveUnlessResumeBlocked may already have
+        // reconciled run.status to a halting status another writer
+        // committed while the step was suspending (e.g. a concurrent
+        // cancel()) — that write is already persisted. Resurrecting WAITING
+        // over it here would both defeat the cancel and hit saveChecked with
+        // this entity's now-stale revision, producing a spurious RUN_CONFLICT
+        // for a synchronous caller instead of just returning the cancelled run.
+        if (isResumeBlocked(run.status)) {
+          this.log.warn("Not suspending: run moved to a resume-blocked state out of band", {
+            runId, stepNumber: nextStep, status: run.status,
+          });
+          return run;
+        }
         run.status = WorkflowStatus.WAITING;
         const saved = await this.runs.saveChecked(run);
         await this.publishSuspension(saved, nextStep, result.suspend, 0);
@@ -282,7 +322,7 @@ export class RunExecutor extends WorkflowManager {
         stepNumber,
         kind: "resume",
         correlationId: effective.kind === "awaitCallback" ? effective.correlationId : undefined,
-        attempt: plan.remaining,
+        remainingDelaySeconds: plan.remaining,
       },
       { delaySeconds: plan.delaySeconds }
     );
@@ -294,7 +334,7 @@ export class RunExecutor extends WorkflowManager {
    * the Phase 1 guards discard duplicates and stale deliveries.
    */
   async resume(msg: WorkflowMessage): Promise<WorkflowRun> {
-    if (msg.attempt && msg.attempt > 0) {
+    if (msg.remainingDelaySeconds && msg.remainingDelaySeconds > 0) {
       const run = await this.runs.findById(msg.tenantId, msg.runId);
       if (!run) {
         throw new WfeError(`Cannot locate workflow run ${msg.runId}`, {
@@ -308,7 +348,7 @@ export class RunExecutor extends WorkflowManager {
         return run;
       }
       await this.publishSuspension(
-        run, msg.stepNumber, { kind: "delay", delaySeconds: msg.attempt }, msg.attempt
+        run, msg.stepNumber, { kind: "delay", delaySeconds: msg.remainingDelaySeconds }, msg.remainingDelaySeconds
       );
       return run;
     }

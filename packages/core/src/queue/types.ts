@@ -8,8 +8,20 @@ export interface WorkflowMessage {
   /** Payload for a callback; becomes the step's `body`. */
   body?: unknown;
   correlationId?: string;
-  /** Incremented by core when chaining a delay longer than the driver allows. */
+  /**
+   * Delivery attempt counter. Reserved for a driver's own redelivery count
+   * (e.g. SQS's `ApproximateReceiveCount`); core does not populate or read
+   * it today. Kept distinct from `remainingDelaySeconds` below — the two are
+   * different units and must never be conflated, or a redelivered ordinary
+   * message would be misread as a chained delay.
+   */
   attempt?: number;
+  /**
+   * Seconds still owed after this hop, set by core when a requested delay
+   * exceeded the driver's `maxDelaySeconds` and had to be chained. Greater
+   * than zero tells `RunExecutor.resume` to re-publish rather than execute.
+   */
+  remainingDelaySeconds?: number;
 }
 
 export interface QueueDefinition {

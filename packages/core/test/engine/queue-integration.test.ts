@@ -17,6 +17,17 @@ jest.setTimeout(120000);
 
 let runCount = 0;
 
+// Hoisted to module scope (rather than declared inside the describe block
+// below) so the step classes below — which must themselves be declared
+// before any describe/beforeAll assigns these — can close over the same
+// executor/db instances the tests use. Mirrors run-loop.test.ts's pattern.
+let executor: RunExecutor;
+let db: DbContext;
+
+// Set by LockHoldingStep once it has taken the row lock; the test that uses
+// it releases the lock through this after asserting on the resulting error.
+let lockHolderRelease: (() => Promise<void>) | undefined;
+
 class CountingStep extends BaseStep {
   async run(ctx: StepContext): Promise<RunStepResponse> {
     runCount += 1;
@@ -33,6 +44,59 @@ class SleepStep extends BaseStep {
     }
     ctx.step.status = WorkflowStatus.WAITING;
     return { stepState: ctx.step, suspend: { kind: "delay", delaySeconds: 60 } };
+  }
+}
+
+// Requests a delay well past the memory driver's 900s maxDelaySeconds, so
+// resuming it exercises the chaining path in resume()/publishSuspension.
+class LongSleepStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    if (ctx.isResume) {
+      ctx.step.status = WorkflowStatus.COMPLETE;
+      return { stepState: ctx.step };
+    }
+    ctx.step.status = WorkflowStatus.WAITING;
+    return { stepState: ctx.step, suspend: { kind: "delay", delaySeconds: 2000 } };
+  }
+}
+
+// Suspends on an awaitCallback with no queue named — there is nothing for
+// core to schedule a resume on, so publishSuspension/planSuspension must
+// refuse this rather than silently parking on DELAY_QUEUE.
+class UnnamedCallbackStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    ctx.step.status = WorkflowStatus.WAITING;
+    return { stepState: ctx.step, suspend: { kind: "awaitCallback" } };
+  }
+}
+
+// Cancels its own run mid-execution (the same shape as run-loop.test.ts's
+// CancellingStep) and then throws, standing in for a step whose own failure
+// races a concurrent operator cancel(). The cancelled status must survive.
+class CancelThenThrowStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    await executor.cancel(ctx.run.tenantId, ctx.run.id!);
+    throw new Error("boom after cancel");
+  }
+}
+
+// Takes the row's FOR UPDATE lock on a separate, never-committed transaction
+// and holds it past the executor's configured lock_timeout, so the
+// executor's own completion save times out with RUN_LOCK_TIMEOUT instead of
+// succeeding. Standing in for another writer that is slow to finish its own
+// checked save on the same run.
+class LockHoldingStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    const ds = await db.getDataSource();
+    const holder = ds.createQueryRunner();
+    await holder.startTransaction();
+    await holder.query("SELECT revision FROM workflow_run WHERE id = $1 FOR UPDATE", [ctx.run.id]);
+    lockHolderRelease = async () => {
+      await holder.rollbackTransaction();
+      await holder.release();
+    };
+    ctx.step.status = WorkflowStatus.COMPLETE;
+    return { stepState: ctx.step };
   }
 }
 
@@ -59,15 +123,18 @@ describe("planSuspension", () => {
     const plan = planSuspension({ kind: "awaitCallback", queue: "billing" }, 900);
     expect(plan.delaySeconds).toBe(0);
   });
+
+  it("refuses an await-callback suspension that names no queue", () => {
+    expect(() => planSuspension({ kind: "awaitCallback" }, 900)).toThrow(/queue/i);
+  });
 });
 
 describe("executor queue integration", () => {
   let container: StartedPostgreSqlContainer;
-  let db: DbContext;
   let queue: MemoryQueueDriver;
-  let executor: RunExecutor;
   let runs: RunRepository;
   let evaluator: ExpressionEvaluator;
+  let registry: StepRegistry;
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
@@ -75,10 +142,14 @@ describe("executor queue integration", () => {
     db = new DbContext(config);
     await db.runMigrations();
 
-    const registry = new StepRegistry();
+    registry = new StepRegistry();
     registerBuiltInSteps(registry);
     registry.register({ type: "test.counting", version: "1.0.0", factory: (p) => new CountingStep(p) });
     registry.register({ type: "test.sleep", version: "1.0.0", factory: (p) => new SleepStep(p) });
+    registry.register({ type: "test.long-sleep", version: "1.0.0", factory: (p) => new LongSleepStep(p) });
+    registry.register({ type: "test.unnamed-callback", version: "1.0.0", factory: (p) => new UnnamedCallbackStep(p) });
+    registry.register({ type: "test.cancel-then-throw", version: "1.0.0", factory: (p) => new CancelThenThrowStep(p) });
+    registry.register({ type: "test.lock-holding", version: "1.0.0", factory: (p) => new LockHoldingStep(p) });
 
     queue = new MemoryQueueDriver();
     await queue.ensureQueues([{ queueName: DELAY_QUEUE }]);
@@ -160,5 +231,88 @@ describe("executor queue integration", () => {
     });
     const runId = await startRun("q-5", ["test.sleep"]);
     await expect(noQueue.start("default", runId)).rejects.toThrow(/queue/i);
+  });
+
+  it("fails loudly when an awaitCallback suspension names no queue to park on", async () => {
+    const runId = await startRun("q-6", ["test.unnamed-callback"]);
+    await expect(executor.start("default", runId)).rejects.toThrow(/queue/i);
+  });
+
+  it("chains a delay longer than the driver maximum across two hops", async () => {
+    const runId = await startRun("q-7", ["test.long-sleep", "test.counting"]);
+    const run = await executor.start("default", runId);
+    expect(run.status).toBe(WorkflowStatus.WAITING);
+
+    const forRun = () => queue.pending(DELAY_QUEUE).filter((m) => m.runId === runId);
+
+    // 2000s requested, capped at the driver's 900s maximum: 900 spent now,
+    // 1100 still owed and carried in the message.
+    let batch = forRun();
+    expect(batch).toHaveLength(1);
+    const first = batch[0];
+    expect(first).toMatchObject({ tenantId: "default", runId, stepNumber: 0, kind: "resume" });
+    expect(first.remainingDelaySeconds).toBe(1100);
+
+    const afterFirstResume = await executor.resume(first);
+    // A message still carrying a remainder must be re-published, not
+    // executed: the run stays WAITING and the next step must not have run.
+    expect(afterFirstResume.status).toBe(WorkflowStatus.WAITING);
+    expect(runCount).toBe(0);
+
+    // The original message is never removed by resume() itself — that is
+    // the queue driver's job once it has a consumer (out of scope here) —
+    // so a second, newly published message should now sit alongside it.
+    batch = forRun();
+    expect(batch).toHaveLength(2);
+    const second = batch[1];
+    expect(second).toMatchObject({ tenantId: "default", runId, stepNumber: 0, kind: "resume" });
+    // Another 900s spent from the 1100 owed: 200 left, strictly less than
+    // what was carried into this hop.
+    expect(second.remainingDelaySeconds).toBe(200);
+    expect(second.remainingDelaySeconds).toBeLessThan(first.remainingDelaySeconds!);
+
+    // Resuming the second message chains once more (200s still owed) rather
+    // than executing; only the resulting third, remainder-free message
+    // actually resumes the step.
+    const afterSecondResume = await executor.resume(second);
+    expect(afterSecondResume.status).toBe(WorkflowStatus.WAITING);
+    expect(runCount).toBe(0);
+    const third = forRun()[2];
+    expect(third.remainingDelaySeconds).toBe(0);
+    const finished = await executor.resume(third);
+    expect(finished.status).toBe(WorkflowStatus.COMPLETE);
+    expect(runCount).toBe(1);
+  });
+
+  it("keeps a concurrently cancelled run CANCELLED when the step that raced it then throws", async () => {
+    const runId = await startRun("q-8", ["test.cancel-then-throw"]);
+    await expect(executor.start("default", runId)).rejects.toThrow(/boom after cancel/);
+    const reloaded = await runs.findById("default", runId);
+    expect(reloaded!.status).toBe(WorkflowStatus.CANCELLED);
+  });
+
+  it("does not persist FAILED when the completion save times out on a contended lock", async () => {
+    const shortLockDb = new DbContext({ dbUrl: container.getConnectionUri(), lockTimeoutMs: 200 });
+    const shortLockExecutor = new RunExecutor({
+      config: { dbUrl: container.getConnectionUri() },
+      db: shortLockDb,
+      registry: (executor as unknown as { registry: StepRegistry }).registry,
+      evaluator,
+      queue,
+    });
+
+    const runId = await startRun("q-9", ["test.lock-holding"]);
+    try {
+      await expect(shortLockExecutor.start("default", runId)).rejects.toMatchObject({
+        code: "RUN_LOCK_TIMEOUT",
+      });
+    } finally {
+      await lockHolderRelease?.();
+      lockHolderRelease = undefined;
+      await shortLockDb.close();
+    }
+
+    const reloaded = await runs.findById("default", runId);
+    expect(reloaded!.status).not.toBe(WorkflowStatus.FAILED);
   });
 });
