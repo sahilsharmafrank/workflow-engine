@@ -58,6 +58,13 @@ function makeCtx(inputs: Record<string, unknown>) {
 describe("HttpStep", () => {
   const httpStep = new HttpStep({ name: "H", version: "1.0.0", type: "core.http" });
 
+  // The test server above is only reachable at 127.0.0.1 — a loopback
+  // address the SSRF guard (see the "SSRF protection" suite below) refuses
+  // by default. Every functional test in this suite needs it explicitly
+  // allowed; the guard itself is exercised separately, in isolation.
+  beforeEach(() => { process.env.WFE_HTTP_ALLOW_PRIVATE_HOSTS = "true"; });
+  afterEach(() => { delete process.env.WFE_HTTP_ALLOW_PRIVATE_HOSTS; });
+
   it("makes a GET request and captures the response", async () => {
     const ctx = makeCtx({ url: `${baseUrl}/ok` });
     const result = await httpStep.run(ctx as any);
@@ -91,5 +98,54 @@ describe("HttpStep", () => {
     await expect(httpStep.run(ctx as any)).rejects.toMatchObject({
       code: "HTTP_STEP_FAILED",
     });
+  });
+});
+
+describe("HttpStep SSRF protection", () => {
+  const httpStep = new HttpStep({ name: "H", version: "1.0.0", type: "core.http" });
+
+  afterEach(() => { delete process.env.WFE_HTTP_ALLOW_PRIVATE_HOSTS; });
+
+  it("refuses a loopback target by default", async () => {
+    delete process.env.WFE_HTTP_ALLOW_PRIVATE_HOSTS;
+    const ctx = makeCtx({ url: `${baseUrl}/ok` }); // baseUrl is 127.0.0.1
+    await expect(httpStep.run(ctx as any)).rejects.toMatchObject({
+      statusCode: 400, code: "HTTP_STEP_BLOCKED_HOST",
+    });
+  });
+
+  it("permits a loopback target once WFE_HTTP_ALLOW_PRIVATE_HOSTS=true", async () => {
+    process.env.WFE_HTTP_ALLOW_PRIVATE_HOSTS = "true";
+    const ctx = makeCtx({ url: `${baseUrl}/ok` });
+    const result = await httpStep.run(ctx as any);
+    expect(result.stepState.status).toBe(WorkflowStatus.COMPLETE);
+    expect(result.stepState.outputs).toMatchObject({ status: 200 });
+  });
+
+  it("refuses a redirect that lands on a blocked host, even though the initial URL is allowed", async () => {
+    delete process.env.WFE_HTTP_ALLOW_PRIVATE_HOSTS;
+
+    // 8.8.8.8 is a literal, public IP — assertHostAllowed clears it without
+    // any real DNS lookup or network call. fetch itself is mocked so no real
+    // request is issued to it either: this isolates "does the redirect
+    // target get checked independently of the initial URL" from any
+    // dependency on real network access in the test environment.
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: "http://169.254.169.254/latest/meta-data/iam/security-credentials/" },
+      })
+    );
+
+    try {
+      const ctx = makeCtx({ url: "http://8.8.8.8/redirect-to-metadata" });
+      await expect(httpStep.run(ctx as any)).rejects.toMatchObject({
+        statusCode: 400, code: "HTTP_STEP_BLOCKED_HOST",
+      });
+      // The blocked redirect target must never actually be requested.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

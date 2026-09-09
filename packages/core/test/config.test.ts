@@ -1,4 +1,4 @@
-import { loadEngineConfig } from "../src/config";
+import { isHttpAllowPrivateHosts, loadEngineConfig } from "../src/config";
 
 describe("loadEngineConfig", () => {
   const baseEnv = { WFE_DB_URL: "postgres://localhost:5432/wfe" };
@@ -36,5 +36,19 @@ describe("loadEngineConfig", () => {
     expect(() => loadEngineConfig({ ...baseEnv, WFE_EXPRESSION_TIMEOUT_MS: "not-a-number" })).toThrow(
       /WFE_EXPRESSION_TIMEOUT_MS/
     );
+  });
+
+  // core.http's SSRF guard (see http-step.ts) must fail closed: anything
+  // other than the literal string "true" leaves private hosts blocked.
+  it("defaults httpAllowPrivateHosts to false", () => {
+    expect(loadEngineConfig(baseEnv).httpAllowPrivateHosts).toBe(false);
+    expect(isHttpAllowPrivateHosts(baseEnv)).toBe(false);
+  });
+
+  it("enables httpAllowPrivateHosts only for the literal string \"true\"", () => {
+    expect(loadEngineConfig({ ...baseEnv, WFE_HTTP_ALLOW_PRIVATE_HOSTS: "true" }).httpAllowPrivateHosts).toBe(true);
+    expect(isHttpAllowPrivateHosts({ ...baseEnv, WFE_HTTP_ALLOW_PRIVATE_HOSTS: "true" })).toBe(true);
+    expect(isHttpAllowPrivateHosts({ ...baseEnv, WFE_HTTP_ALLOW_PRIVATE_HOSTS: "TRUE" })).toBe(false);
+    expect(isHttpAllowPrivateHosts({ ...baseEnv, WFE_HTTP_ALLOW_PRIVATE_HOSTS: "1" })).toBe(false);
   });
 });

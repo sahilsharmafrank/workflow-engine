@@ -151,6 +151,7 @@ Read by `loadEngineConfig()` from the environment:
 | `WFE_EXPRESSION_TIMEOUT_MS` | `100` | Per-expression wall-clock limit. Must be finite and positive — `0`, negatives and non-numbers are rejected at boot, because this is the only guard against a runaway expression. |
 | `WFE_EXPRESSION_CONFIG_KEYS` | *(empty)* | Comma-separated allowlist filtering `expressionValues`. |
 | `WFE_LOG_LEVEL` | `info` | pino level. Tests set `silent`. |
+| `WFE_HTTP_ALLOW_PRIVATE_HOSTS` | `false` | Set `true` to let `core.http` target private, loopback, link-local, or unique-local addresses. See [Built-in steps](#built-in-steps). **Relaxing this exposes every internal service reachable from the engine to anyone who can author a workflow definition** — only set it if the deployment genuinely needs `core.http` to call internal services, and treat definitions as trusted input if you do. |
 
 `expressionValues` — the map expressions can read via `config.*` — is set
 **programmatically**, never from the environment:
@@ -239,7 +240,7 @@ in this phase.
 | `core.transform` | Writes its resolved inputs straight to its outputs — moves and renames values with no code. |
 | `core.delay` | Suspends the run for its `seconds` input, then completes. Rejects a non-finite or negative value with `DELAY_INVALID_SECONDS`. See [Queues](#queues). |
 | `core.externalTask` | Dispatches to an external service's queue and waits for its callback. See [Queues](#queues). |
-| `core.http` | Makes an HTTP request. Supports method, headers, body, a timeout, and retry with backoff. |
+| `core.http` | Makes an HTTP request. Supports method, headers, body, a timeout, and retry with backoff. **SSRF guard:** by default, refuses to request a target that resolves to a private, loopback, link-local, or unique-local address (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` — which covers the cloud metadata address `169.254.169.254` — `::1`, `fc00::/7`, and IPv6 link-local `fe80::/10`), throwing `HTTP_STEP_BLOCKED_HOST`. The check applies to the initial URL and to every redirect hop (redirects are followed manually rather than automatically, specifically so a public URL that 302s to a blocked address is still caught). The response body is capped at 5 MiB. Set `WFE_HTTP_ALLOW_PRIVATE_HOSTS=true` to disable the guard entirely — do this only if the deployment needs `core.http` to reach internal services, and remember that a workflow definition is untrusted input (see [Workflow definitions](#workflow-definitions)): relaxing this flag lets any definition author reach those services and read the reply back through the run's outputs. The guard resolves the hostname itself before requesting it; it does not close a DNS-rebinding race against the resolution `fetch` performs when it actually connects. |
 | `core.condition` | Evaluates a condition and either continues, skips the rest, or fails the run. |
 | `core.subWorkflow` | Starts a child workflow run and, optionally, waits for it to finish. |
 | `core.emitEvent` | Publishes a message to a named queue without suspending the run. |

@@ -20,6 +20,31 @@ export interface EngineConfig {
    * Defaults to a few seconds.
    */
   lockTimeoutMs?: number;
+  /**
+   * Whether `core.http` may target private, loopback, link-local, or
+   * unique-local addresses (e.g. `127.0.0.1`, `10.0.0.0/8`, the cloud
+   * metadata address `169.254.169.254`). Defaults to false: a workflow
+   * definition is untrusted input (see README §Definition sandbox), so by
+   * default `core.http` refuses to reach internal services on the
+   * operator's behalf. Populated here via `isHttpAllowPrivateHosts` purely
+   * for visibility alongside the rest of `EngineConfig` — `HttpStep` itself
+   * calls that function directly (see http-step.ts), since steps only ever
+   * see the allowlisted `expressionValues` subset of this config via
+   * `ctx.config`, never the full `EngineConfig`.
+   */
+  httpAllowPrivateHosts?: boolean;
+}
+
+/**
+ * Whether `core.http` may target private/loopback/link-local/unique-local
+ * addresses. A standalone accessor (not just a field read off a loaded
+ * `EngineConfig`) because `HttpStep` has no `EngineConfig` instance to read
+ * — steps only ever see `ctx.config`, the allowlisted `expressionValues`
+ * subset — so it reads the environment itself, the same way `loadEngineConfig`
+ * reads `WFE_SHOW_SQL`.
+ */
+export function isHttpAllowPrivateHosts(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.WFE_HTTP_ALLOW_PRIVATE_HOSTS === "true";
 }
 
 export function loadEngineConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
@@ -56,5 +81,6 @@ export function loadEngineConfig(env: NodeJS.ProcessEnv = process.env): EngineCo
     expressionTimeoutMs,
     expressionConfigKeys: env.WFE_EXPRESSION_CONFIG_KEYS?.split(",").map((k) => k.trim()).filter(Boolean) ?? [],
     lockTimeoutMs,
+    httpAllowPrivateHosts: isHttpAllowPrivateHosts(env),
   };
 }
