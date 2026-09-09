@@ -24,6 +24,18 @@ const SETTLED_STEP_STATUSES: ReadonlySet<WorkflowStatus> = new Set([
   WorkflowStatus.CANCELLED,
 ]);
 
+/**
+ * Run statuses cancel() must refuse to overwrite. Phase 4's batch cancel
+ * (`PUT /batch-jobs/:id/cancel`) loops over every run in a batch and calls
+ * cancel() on each — including ones that already finished — so without this
+ * guard a mixed batch silently rewrites COMPLETE/FAILED runs to CANCELLED.
+ */
+const TERMINAL_RUN_STATUSES: ReadonlySet<WorkflowStatus> = new Set([
+  WorkflowStatus.COMPLETE,
+  WorkflowStatus.FAILED,
+  WorkflowStatus.CANCELLED,
+]);
+
 export class RunExecutor extends WorkflowManager {
   /**
    * Only the allowlisted keys of `expressionValues` are ever visible to an
@@ -417,6 +429,14 @@ export class RunExecutor extends WorkflowManager {
       throw new WfeError(`Cannot locate workflow run ${runId}`, {
         statusCode: 404, code: "RUN_NOT_FOUND",
       });
+    }
+    // A run already in a terminal state must stay exactly as it finished —
+    // see TERMINAL_RUN_STATUSES for why this matters for batch cancel.
+    if (TERMINAL_RUN_STATUSES.has(run.status)) {
+      throw new WfeError(
+        `Run ${runId} is already ${run.status} and cannot be cancelled`,
+        { statusCode: 409, code: "RUN_NOT_CANCELLABLE" }
+      );
     }
     run.status = WorkflowStatus.CANCELLED;
     this.log.info("Cancelled workflow run", { runId, tenantId });

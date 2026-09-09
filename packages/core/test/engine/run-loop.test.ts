@@ -209,6 +209,23 @@ describe("RunExecutor.run", () => {
     expect(reloaded!.status).toBe(WorkflowStatus.CANCELLED);
   });
 
+  it("refuses to cancel a run that already completed, and leaves it COMPLETE", async () => {
+    // Against the old code, cancel() unconditionally sets status =
+    // CANCELLED, so this would silently rewrite a finished run's outcome —
+    // exactly what Phase 4's batch cancel loop does when a batch mixes
+    // still-running and already-finished runs.
+    const runId = await startRun("loop-11", threeSteps("test.counting"));
+    const run = await executor.start("default", runId);
+    expect(run.status).toBe(WorkflowStatus.COMPLETE);
+
+    await expect(executor.cancel("default", runId)).rejects.toMatchObject({
+      statusCode: 409, code: "RUN_NOT_CANCELLABLE",
+    });
+
+    const reloaded = await runs.findById("default", runId);
+    expect(reloaded!.status).toBe(WorkflowStatus.COMPLETE);
+  });
+
   it("rejects restartFromStep with an out-of-range step instead of completing having run nothing", async () => {
     // Against the old code: currentStep is set to 99, the "reached the end"
     // guard passes (99 === 99), the while(99 < 3) loop body never runs, and

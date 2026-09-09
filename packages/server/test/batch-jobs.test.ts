@@ -5,6 +5,7 @@ import { PostgreSqlContainer, StartedPostgreSqlContainer } from "@testcontainers
 import {
   DbContext, ExpressionEvaluator, RunExecutor, StepRegistry, registerBuiltInSteps,
   DefinitionRepository, validateDefinitionShape, MemoryQueueDriver, DELAY_QUEUE, RESPONSE_QUEUE,
+  BatchJobRepository,
 } from "@wfe/core";
 import { WorkflowDefinitionStatus } from "@wfe/sdk";
 import { createApp } from "../src/app";
@@ -143,6 +144,64 @@ describe("Batch jobs", () => {
     const after = await request(app).get(`/api/v1/runs/${runId}`);
     expect(after.status).toBe(200);
     expect(after.body.status).toBe("cancelled");
+  });
+
+  it("PUT /api/v1/batch-jobs/:id/cancel cancels in-flight runs but leaves already-finished runs untouched", async () => {
+    // A batch job fans every input out through the same definition, so a
+    // "mixed" batch (one run already finished, one still in flight) can't be
+    // produced through POST /batch-jobs alone. Build it directly: one run
+    // from the instantly-completing definition, one parked on cancel-target.
+    const completedCreate = await request(app)
+      .post("/api/v1/batch-jobs")
+      .send({
+        name: "mixed-batch-completed-run",
+        definitionName: "batch-target",
+        definitionVersion: "1.0.0",
+        inputs: [{ x: 40 }],
+      });
+    const [completedRunId] = completedCreate.body.runIds;
+    const completedBefore = await request(app).get(`/api/v1/runs/${completedRunId}`);
+    expect(completedBefore.body.status).toBe("complete");
+
+    const waitingCreate = await request(app)
+      .post("/api/v1/batch-jobs")
+      .send({
+        name: "mixed-batch-waiting-run",
+        definitionName: "cancel-target",
+        definitionVersion: "1.0.0",
+        inputs: [{ x: 41 }],
+      });
+    const [waitingRunId] = waitingCreate.body.runIds;
+    const waitingBefore = await request(app).get(`/api/v1/runs/${waitingRunId}`);
+    expect(waitingBefore.body.status).toBe("waiting");
+
+    const batchJobs = new BatchJobRepository(db);
+    const mixedJob = await batchJobs.create({
+      tenantId: "default",
+      name: "mixed-batch",
+      definitionName: "cancel-target",
+      definitionVersion: "1.0.0",
+      status: "running",
+      totalCount: 2,
+      inputs: [{ x: 40 }, { x: 41 }],
+      runIds: [completedRunId, waitingRunId],
+    });
+
+    const res = await request(app).put(`/api/v1/batch-jobs/${mixedJob.id}/cancel`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("cancelled");
+
+    // The still-running run must actually be cancelled...
+    const waitingAfter = await request(app).get(`/api/v1/runs/${waitingRunId}`);
+    expect(waitingAfter.body.status).toBe("cancelled");
+
+    // ...but the already-finished run must be left exactly as it finished.
+    // Against the old code, run-executor's cancel() unconditionally
+    // overwrites status, so this run would come back "cancelled" instead of
+    // "complete" even though the batch endpoint still reports 200 overall
+    // (the batch loop already catches and discards per-run cancel errors).
+    const completedAfter = await request(app).get(`/api/v1/runs/${completedRunId}`);
+    expect(completedAfter.body.status).toBe("complete");
   });
 
   it("PUT /api/v1/batch-jobs/:id/cancel rejects a batch already in a terminal state", async () => {
