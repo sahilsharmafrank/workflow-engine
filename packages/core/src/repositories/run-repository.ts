@@ -9,6 +9,20 @@ import { WfeError } from "../errors";
 // waiting on a row lock (`lock_not_available`).
 const PG_LOCK_NOT_AVAILABLE = "55P03";
 
+// The only jsonb columns `search()` may filter on. `column` in a filter key
+// is spliced directly into a raw SQL identifier position (`r.${column}Json`),
+// so this allowlist — not escaping — is what keeps a caller from naming an
+// arbitrary column or, worse, breaking out of the identifier position
+// entirely (see SEARCH_PATH_SEGMENT below).
+const SEARCH_JSON_COLUMNS: ReadonlySet<string> = new Set(["inputs", "outputs", "state"]);
+
+// Every path segment after the column is also spliced into the query — not
+// as an identifier, but into the JSON object built for the `@>` containment
+// parameter. It never reaches SQL as raw text, but it's still attacker
+// input, so it's held to the same conservative shape: letters, digits,
+// underscore and hyphen only.
+const SEARCH_PATH_SEGMENT = /^[A-Za-z0-9_-]+$/;
+
 export class RunRepository {
   constructor(private readonly db: DbContext) {}
 
@@ -175,17 +189,33 @@ export class RunRepository {
     const qb = ds.getRepository(WorkflowRun).createQueryBuilder("r")
       .where("r.tenantId = :tenantId", { tenantId });
 
-    // Each key like "inputs.foo" becomes a jsonb containment check
+    // Each key like "inputs.foo" becomes a jsonb containment check. `column`
+    // is validated against an allowlist and every `path` segment against a
+    // conservative identifier pattern before either touches the query:
+    // `column` is spliced into a raw SQL identifier (`r.${jsonColumn}`), and
+    // `qb.andWhere` does not escape it. An unvalidated key can otherwise
+    // break out of that identifier position — e.g. a key like
+    // "id > 0 OR r.id > 0 --.x" turns the tenant filter into
+    // `(r.tenantId = $1 AND r.id > 0) OR r.id > 0`, returning every tenant's
+    // runs. A bad key is rejected outright rather than silently dropped: a
+    // filter that silently matches nothing (or, as here, too much) is its
+    // own bug.
+    let paramCounter = 0;
     for (const [key, value] of Object.entries(filter)) {
       const [column, ...path] = key.split(".");
-      const jsonColumn = `${column}Json`;
-      const paramName = `filter_${path.join("_")}`;
-      if (path.length > 0) {
-        const nested = path.reduceRight<unknown>((acc, k) => ({ [k]: acc }), value);
-        qb.andWhere(`r.${jsonColumn} @> :${paramName}`, {
-          [paramName]: JSON.stringify(nested),
-        });
+      if (!SEARCH_JSON_COLUMNS.has(column) || path.length === 0 || !path.every((segment) => SEARCH_PATH_SEGMENT.test(segment))) {
+        throw new WfeError(
+          `Invalid search filter key "${key}": expected "<${[...SEARCH_JSON_COLUMNS].join("|")}>.<path>", with each path segment limited to letters, digits, underscore and hyphen`,
+          { statusCode: 400, code: "RUN_SEARCH_INVALID_FILTER_KEY" }
+        );
       }
+
+      const jsonColumn = `${column}Json`;
+      const paramName = `filter_${paramCounter++}`;
+      const nested = path.reduceRight<unknown>((acc, k) => ({ [k]: acc }), value);
+      qb.andWhere(`r.${jsonColumn} @> :${paramName}`, {
+        [paramName]: JSON.stringify(nested),
+      });
     }
 
     qb.orderBy("r.updatedDate", "DESC").take(100);

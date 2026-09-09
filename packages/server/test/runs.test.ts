@@ -27,6 +27,14 @@ describe("runs controller", () => {
       definition: simpleDef as never,
       status: WorkflowDefinitionStatus.PUBLISHED,
     });
+
+    // Same definition under a second tenant, for the cross-tenant search
+    // isolation test below.
+    await new DefinitionRepository(ctx.db).create({
+      tenantId: "tenant-b", name: "test-wf", version: "1.0.0",
+      definition: simpleDef as never,
+      status: WorkflowDefinitionStatus.PUBLISHED,
+    });
   });
 
   afterAll(async () => {
@@ -91,6 +99,48 @@ describe("runs controller", () => {
     expect(res.body.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("POST /runs/search rejects a filter key crafted to break out of the identifier position", async () => {
+    // `column` from a filter key like "inputs.foo" is spliced directly into
+    // a raw SQL identifier (`r.${column}Json`) inside RunRepository.search,
+    // with no escaping. Verified against the actual generated SQL (see the
+    // next test): this key turns the query's WHERE clause into
+    // `(r.tenant_id = $1 AND r.id > 0) OR id = id OR inputs_json @> $2` —
+    // an unconditional tautology (`id = id`) sitting in its own OR branch,
+    // entirely outside the tenant filter — which returns every tenant's runs.
+    const res = await request(ctx.app)
+      .post("/api/v1/runs/search")
+      .send({ filter: { "id > 0 OR id = id OR inputs_.x": "anything" } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("RUN_SEARCH_INVALID_FILTER_KEY");
+  });
+
+  it("POST /runs/search never returns another tenant's runs, even via the crafted bypass key", async () => {
+    // A second tenant's run, with an input value that would stand out if it
+    // leaked into tenant "default"'s search results.
+    const otherTenantRun = await request(ctx.app)
+      .post("/api/v1/runs")
+      .set("X-Tenant-Id", "tenant-b")
+      .send({ name: "test-wf", version: "1.0.0", inputs: { marker: "tenant-b-secret" } });
+    expect(otherTenantRun.status).toBe(201);
+
+    const res = await request(ctx.app)
+      .post("/api/v1/runs/search")
+      // Tenant "default" (the default when no X-Tenant-Id header is sent)
+      // submits the same OR-based bypass key from the test above. Against
+      // the current code this genuinely returns 200 with tenant-b's run
+      // included (verified directly against the generated SQL) — this is
+      // not a hypothetical, it's the exact reachable exploit.
+      .send({ filter: { "id > 0 OR id = id OR inputs_.x": "anything" } });
+
+    // The fixed behaviour rejects the key outright with 400, so there is no
+    // body to leak through. Assert the invariant directly rather than the
+    // mechanism: tenant-b's run must never come back, whatever the status.
+    const leaked = res.status === 200
+      && (res.body as Array<{ tenantId?: string }>).some((run) => run.tenantId === "tenant-b");
+    expect(leaked).toBe(false);
+  });
+
   it("POST /runs/by-ids returns specific runs", async () => {
     const r1 = await request(ctx.app)
       .post("/api/v1/runs")
@@ -108,9 +158,24 @@ describe("runs controller", () => {
   });
 
   it("PUT /runs/:id/cancel cancels a run", async () => {
+    // "test-wf" is two core.noop steps, which complete synchronously — by
+    // the time this request lands the run could already be COMPLETE, and
+    // cancel() now (correctly) refuses to cancel a terminal run. Use a
+    // definition that parks in WAITING so the run is genuinely still
+    // cancellable when this test calls cancel.
+    await new DefinitionRepository(ctx.db).create({
+      tenantId: "default", name: "cancel-wf", version: "1.0.0",
+      definition: {
+        steps: [
+          { stepName: "Ext", stepVersion: "1.0.0", stepType: "core.externalTask", externalServiceName: "svc", stepInputs: [] },
+        ],
+      } as never,
+      status: WorkflowDefinitionStatus.PUBLISHED,
+    });
+
     const created = await request(ctx.app)
       .post("/api/v1/runs")
-      .send({ name: "test-wf", version: "1.0.0", inputs: {} });
+      .send({ name: "cancel-wf", version: "1.0.0", inputs: {} });
 
     const res = await request(ctx.app).put(`/api/v1/runs/${created.body.runId}/cancel`);
     expect(res.status).toBe(200);
