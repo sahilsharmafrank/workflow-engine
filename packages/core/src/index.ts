@@ -31,3 +31,4 @@ export * from "./steps/delay-step";
 export * from "./steps/emit-event-step";
 export * from "./steps/external-task-step";
 export * from "./steps/http-step";
+export * from "./steps/sub-workflow-step";

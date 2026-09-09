@@ -6,6 +6,7 @@ import { EmitEventStep } from "../steps/emit-event-step";
 import { HttpStep } from "../steps/http-step";
 import { ExternalTaskStep } from "../steps/external-task-step";
 import { NoopStep } from "../steps/noop-step";
+import { SubWorkflowStep } from "../steps/sub-workflow-step";
 import { TransformStep } from "../steps/transform-step";
 
 export interface StepRegistration {
@@ -90,5 +91,11 @@ export function registerBuiltInSteps(registry: StepRegistry): void {
     version: "1.0.0",
     description: "Makes an HTTP request with optional retry/backoff.",
     factory: (params) => new HttpStep(params),
+  });
+  registry.register({
+    type: "core.subWorkflow",
+    version: "1.0.0",
+    description: "Starts a child workflow run (fire-and-forget).",
+    factory: (params) => new SubWorkflowStep(params),
   });
 }

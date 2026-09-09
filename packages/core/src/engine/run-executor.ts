@@ -132,6 +132,12 @@ export class RunExecutor extends WorkflowManager {
       const ctx: StepContext = {
         config, logger: this.log, services: this.services,
         run, step: stepRun, stepNumber, inputs, body, isResume,
+        queue: this.queue ? {
+          publish: (q: string, msg: unknown) =>
+            this.queue!.publish(q, msg as WorkflowMessage),
+        } : undefined,
+        startChildWorkflow: (input) =>
+          this.startWorkflow({ tenantId: run.tenantId, ...input }),
       };
       if (!isResume) {
         await step.start(ctx);
