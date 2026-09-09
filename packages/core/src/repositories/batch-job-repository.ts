@@ -41,6 +41,15 @@ export class BatchJobRepository {
       throw new WfeError(`Batch job ${id} not found`, { statusCode: 404, code: "BATCH_JOB_NOT_FOUND" });
     }
     Object.assign(job, updates);
+    // TypeORM's dirty-check for an UPDATE diffs `entity[column]` against a
+    // freshly reloaded comparator *before* @BeforeUpdate listeners run, so
+    // mutating only the transient `inputs`/`runIds` fields here (leaving the
+    // `inputsJson`/`runIdsJson` columns looking unchanged at diff time) can
+    // make TypeORM emit an UPDATE that omits those columns entirely, even
+    // though `copyToJson()` still fires and mutates the in-memory entity.
+    // Copying to the json columns eagerly, before save(), keeps them dirty
+    // from TypeORM's point of view too.
+    job.copyToJson();
     const ds = await this.db.getDataSource();
     return ds.getRepository(BatchJob).save(job);
   }

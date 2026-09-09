@@ -44,13 +44,34 @@ step sequentially inside a transaction before saving the run (with
 output is now clean — verified with
 `npm run build && npm test 2>&1 | grep -i deprecation` (no output).
 
-### `delay-step.ts` has no NaN guard
+### ~~`delay-step.ts` has no NaN guard~~ (resolved, Phase 4)
 
-`Number(ctx.inputs.seconds ?? 0)` yields `NaN` for a non-numeric `seconds`. The
-memory driver then fires immediately and SQS rejects the call. Definition-shape
-validation is the right place to catch this rather than the step.
+**Resolution:** `DelayStep` now rejects anything that is not a finite,
+non-negative number with a `WfeError` carrying `DELAY_INVALID_SECONDS` and a 400
+status, naming the offending value. Guarding in the step rather than only in
+definition validation is deliberate: `seconds` is an *expression result*, not a
+literal in the definition, so validation at publish time cannot see what it will
+evaluate to at run time.
 
-**Phase 3 or 4**, with the rest of definition validation.
+## From Phase 4 (plugins, steps, snapshotting, batch jobs)
+
+Small items deferred during Phase 4 review. None are correctness bugs in the
+happy path; each is worth closing when its file is next touched.
+
+- **Async plugin register path is untested.** `loadPlugins` awaits a plugin's
+  register function, so a plugin returning a promise works, but no test covers
+  it.
+- **The sample plugin package declares no `@wfe/sdk` dependency.** It resolves
+  through the workspace today; a real third-party plugin would need the
+  dependency declared, so the sample sets a poor example.
+- **`EmitEventStep` does not validate an empty queue input.** An empty string
+  publishes to a queue named `""` rather than failing.
+- **`ConditionStep` silently skips on an unknown action value.** A typo in
+  `action` behaves like a deliberate skip instead of erroring.
+- **Definition snapshotting is a shallow assignment.** A deep clone would be
+  safer against later mutation of the source definition object.
+- **`retry`/`backoff` success path and `HTTP_STEP_MISSING_URL` are untested** in
+  `core.http`.
 
 ### RabbitMQ driver, deferred minors
 

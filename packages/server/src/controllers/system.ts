@@ -34,6 +34,30 @@ export function systemRoutes(deps?: { registry?: StepRegistry }): Router {
     router.get("/openapi.json", (_req, res) => {
       res.json(spec);
     });
+
+    router.get("/filter-configuration", (_req, res) => {
+      const stepTypes = deps.registry!.list().map((r) => r.type);
+      res.json({
+        definitions: [
+          { field: "status", type: "enum", values: ["draft", "published", "archived"] },
+          { field: "name", type: "text" },
+        ],
+        runs: [
+          { field: "status", type: "enum", values: [
+            "starting", "running", "complete", "failed", "cancelled", "cancelling", "waiting", "paused",
+          ] },
+          { field: "name", type: "text" },
+          { field: "createdDate", type: "dateRange" },
+        ],
+        steps: [
+          { field: "status", type: "enum", values: [
+            "new", "running", "complete", "failed", "cancelled", "waiting", "skipped",
+          ] },
+          { field: "stepType", type: "enum", values: stepTypes },
+          { field: "externalServiceName", type: "text" },
+        ],
+      });
+    });
   }
 
   return router;

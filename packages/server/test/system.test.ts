@@ -60,4 +60,13 @@ describe("system endpoints", () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain("swagger");
   });
+
+  it("GET /api/v1/filter-configuration returns filter metadata", async () => {
+    const res = await request(ctx.app).get("/api/v1/filter-configuration");
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("definitions");
+    expect(res.body).toHaveProperty("runs");
+    expect(res.body).toHaveProperty("steps");
+    expect(res.body.steps.find((f: any) => f.field === "stepType").values).toContain("core.noop");
+  });
 });

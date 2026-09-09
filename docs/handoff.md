@@ -1,15 +1,20 @@
 # Handoff — continuing this build on another machine
 
-Everything needed to pick this project up cold. Phases 1 and 2 are merged to
-`main` and pushed; Phases 3–6 are unbuilt.
+Everything needed to pick this project up cold. Phases 1–3 are merged to `main`;
+Phase 4 is built on `feat/rest-api-cli` and pending review. Phases 5–6 are
+unbuilt.
 
-Read this alongside two files that are the real authorities:
+Read this alongside three files that are the real authorities:
 
 - `docs/superpowers/specs/2026-09-07-standalone-workflow-engine-design.md` — the
-  binding design. Every plan argues from it, and conflicts resolve against it.
+  binding design for Phases 1–3. Every plan argues from it, and conflicts
+  resolve against it.
+- `docs/superpowers/specs/2026-09-09-phase4-plugins-steps-batch-design.md` — the
+  Phase 4 design: plugin loading, the expanded step library, definition
+  snapshotting, batch jobs.
 - `docs/superpowers/carry-forward.md` — known gaps and deferred decisions, each
   tagged with the phase that should deal with it. **Read this before planning
-  Phase 3.** Two items in it change what Phase 3 has to build.
+  the next phase.**
 
 ---
 
@@ -20,13 +25,16 @@ A standalone, generic workflow engine extracted from a Disney internal monorepo
 Node ^24, Postgres via TypeORM.
 
 ```
-packages/sdk/     @wfe/sdk  — zero runtime deps: BaseStep, StepContext,
-                              WorkflowStatus, the StepSuspension union
-packages/core/    @wfe/core — entities, repositories, migrations, the
-                              sandboxed expression evaluator, WorkflowManager,
-                              RunExecutor, step registry, queue drivers, worker
+packages/sdk/     @wfe/sdk    — zero runtime deps: BaseStep, StepContext,
+                                WorkflowStatus, the StepSuspension union
+packages/core/    @wfe/core   — entities, repositories, migrations, the
+                                sandboxed expression evaluator, WorkflowManager,
+                                RunExecutor, step registry, step library,
+                                plugin loader, queue drivers, worker
+packages/server/  @wfe/server — Express REST API, OpenAPI document, auth
+                                provider interface, and the `wfe` CLI
 examples/         runnable examples + sample definitions
-docs/superpowers/ spec, plans, carry-forward notes
+docs/superpowers/ specs, plans, carry-forward notes
 ```
 
 **Phase 1 (merged)** — entities and migrations, `WorkflowManager` (create) and
@@ -39,15 +47,29 @@ drivers (in-memory with a virtual clock, RabbitMQ with bucketed TTL holding
 queues, SQS with a long-poll loop); executor-owned enqueueing with delay
 chaining; callback resumption; `WorkflowWorker`; compose file; delayed example.
 
-**Not built:** the REST API, OpenAPI, the CLI, plugin loading, the built-in step
-library beyond a handful, the React UI, and anything release-related.
+**Phase 3 (merged)** — `@wfe/server`: an Express REST API over definitions, runs
+and steps; an OpenAPI 3 document served at `/api/v1/docs`; the `wfe` CLI
+(`migrate`, `import`, `serve`, `worker`); a `Dockerfile` and compose
+`server`/`worker` services. Auth is deliberately `none` in v1 — the expression
+sandbox is the only security boundary.
 
-### Test state on `main`
+**Phase 4 (built, pending review)** — the plugin loader (`WFE_PLUGINS`) plus a
+sample plugin package; `core.http`, `core.condition`, `core.subWorkflow` and
+`core.emitEvent` steps; `StepContext` gaining `queue` and `startChildWorkflow`;
+definition snapshotting onto the run at creation; batch jobs (entity,
+repository, migration, controller); and a filter-configuration endpoint.
+
+**Not built:** the React UI (Phase 5) and anything release-related (Phase 6).
+
+### Test state
 
 ```
-@wfe/core   22 suites / 152 tests
-@wfe/sdk     3 suites /  12 tests
+@wfe/core     30 suites / 176 tests
+@wfe/sdk       3 suites /  12 tests
+@wfe/server    6 suites /  41 tests
 ```
+
+Run the suite rather than trusting these; they move every phase.
 
 ---
 
@@ -82,12 +104,15 @@ this.
 ### Verify the checkout before changing anything
 
 ```bash
-npm run build && npm test -w @wfe/core && npm test -w @wfe/sdk
+npm run build && npm test
 ```
 
-Expect the counts in §1. This takes several minutes — RabbitMQ, LocalStack and
-Postgres containers all start. A LocalStack start-timeout is a known
-environmental flake; rerun before believing it.
+`npm test` runs every workspace through turbo. To narrow it while iterating:
+`npm test -w @wfe/core`, `-w @wfe/sdk`, `-w @wfe/server`.
+
+This takes several minutes — RabbitMQ, LocalStack and Postgres containers all
+start. A LocalStack start-timeout is a known environmental flake; rerun before
+believing it.
 
 ---
 
@@ -114,9 +139,14 @@ Corollaries learned the hard way over roughly eight fix rounds:
   how a real warning gets missed later.
 - Full untruncated `Test Suites:` / `Tests:` lines, not a summary.
 
-There is currently one known blemish: a `pg` `DeprecationWarning` about
-`client.query()` on a busy client. It predates Phase 2 and is logged in
-`carry-forward.md` for Phase 3.
+Suite output is currently clean. It did not used to be: a `pg`
+`DeprecationWarning` about `client.query()` on a busy client rode along for two
+phases before Phase 3 traced it — with `node --trace-deprecation` — to
+`RunExecutor.restartFromStep`, where a single cascading `save(run)` handed
+TypeORM several UPDATE subjects that it fired concurrently on one `pg` client.
+Worth remembering as a method: the warning was real, it named a genuine
+concurrency mistake, and it sat unexamined because it was only ever noise in a
+passing run.
 
 ---
 
@@ -167,39 +197,37 @@ From the spec's §14 build order:
 
 | Phase | Work | Milestone |
 |---|---|---|
-| 3 | `@wfe/server`: REST, OpenAPI, CLI | `docker compose up`, then curl starts a run |
-| 4 | Plugin loader, built-in step library, example plugin package | A third-party step package loads and runs |
+| 3 ✅ | `@wfe/server`: REST, OpenAPI, CLI | `docker compose up`, then curl starts a run |
+| 4 ✅ | Plugin loader, built-in step library, example plugin package | A third-party step package loads and runs |
 | 5 | `@wfe/ui`: five screens | Author a definition in the UI, run it, watch it in the tracker |
 | 6 | Docs, examples, publish | Someone else can install it |
 
-**Phase 3** — spec §10 (REST endpoints), §12 (configuration and the
-`wfe migrate | import | serve | worker` CLI). Auth is deliberately **none** in
-v1: the expression sandbox is the only security boundary. The worker CLI runs
-the existing `WorkflowWorker` (listeners only, no HTTP).
-
-**Phase 4** — spec §7.1. A step registry keyed by type name already exists;
-Phase 4 adds boot-time loading from `WFE_PLUGINS` module specifiers, where a
-plugin is an npm package default-exporting `(registry: StepRegistry) => void`.
-
 **Phase 5** — spec §11. Vite, React 18, TypeScript, MUI 5, TanStack Query, with
-the client generated from the OpenAPI document Phase 3 produces. Five screens.
+the client generated from the OpenAPI document Phase 3 produces
+(`/api/v1/docs`). Five screens: Definitions, Definition editor, Run tracker,
+Run detail, Step catalog. The editor is the densest port — the original
+`WorkflowStepsEditor` was 491 lines.
+
+The API surface Phase 5 consumes already exists, including the
+`/filter-configuration` endpoint added in Phase 4, which exists specifically so
+the UI's filter controls are driven by the registry rather than hardcoded.
 
 **Phase 6** — packaging and publishing.
 
-### Before planning Phase 3, settle these
+### Open items
 
-Both are in `carry-forward.md` with full detail:
+`carry-forward.md` holds the current list. The Phase 2 items that once blocked
+Phase 3 — the outbound service-request contract, the spec's self-contradiction
+about service-queue consumers, and the `pg` deprecation warning — were all
+resolved during Phase 3 and are struck through there, with the resolutions
+recorded.
 
-1. **The outbound service-request contract is undesigned.** The engine publishes
-   an external-task dispatch to `wfe-service-<name>` as a `WorkflowMessage` with
-   `kind: "resume"` and **no step inputs**. An external service reading it learns
-   the tenant, run, step and correlation id, but nothing about the work to do.
-   Decide the real request envelope and the reply path before building the API
-   that exposes it.
-2. **The spec contradicts itself about who consumes service queues** (lines 62-63
-   versus 70-71). Phase 2 resolved it in favour of the data-flow diagram —
-   `WorkflowWorker` subscribes to the delay and response queues only. Amend the
-   spec so Phase 3 does not re-derive the bug.
+Worth knowing before Phase 5: several small deferred items accumulated across
+Phase 4 (an untested async plugin-register path, `EmitEventStep` not validating
+an empty queue input, `ConditionStep` silently skipping on unknown action
+values, and a shallow rather than deep definition snapshot). None block the UI;
+all are recorded in the Phase 4 ledger and worth a cleanup pass when those
+files are next touched.
 
 ---
 
@@ -209,10 +237,9 @@ On the new machine, from the repo root, something like:
 
 > Continuing the standalone workflow engine. Read `docs/handoff.md`, then
 > `docs/superpowers/specs/2026-09-07-standalone-workflow-engine-design.md` and
-> `docs/superpowers/carry-forward.md`. Phases 1 and 2 are merged to `main`.
-> I want to build Phase 3 (`@wfe/server`: REST, OpenAPI, CLI). Start by
-> resolving the two carry-forward items that block it, then write the Phase 3
-> plan.
+> `docs/superpowers/carry-forward.md`. Phases 1–4 are done. I want to build
+> Phase 5 (`@wfe/ui`: the five screens, spec §11). Generate the client from the
+> OpenAPI document the server already serves, and write the Phase 5 plan.
 
 Verify the suite is green before starting — that separates a real problem from
 an environment problem, and it takes one command.

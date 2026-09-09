@@ -9,6 +9,7 @@ import { systemRoutes } from "./controllers/system";
 import { definitionRoutes } from "./controllers/definitions";
 import { runRoutes } from "./controllers/runs";
 import { stepRoutes } from "./controllers/steps";
+import { batchJobRoutes } from "./controllers/batch-jobs";
 import { buildOpenApiSpec } from "./openapi/spec";
 
 export interface AppDeps {
@@ -39,6 +40,7 @@ export function createApp(deps: AppDeps): Express {
   app.use("/api/v1", definitionRoutes({ db: deps.db, registry: deps.registry }));
   app.use("/api/v1", runRoutes({ executor: deps.executor, db: deps.db }));
   app.use("/api/v1", stepRoutes({ db: deps.db, registry: deps.registry, evaluator: deps.evaluator }));
+  app.use("/api/v1", batchJobRoutes({ executor: deps.executor, db: deps.db }));
 
   app.use(errorHandler());
 

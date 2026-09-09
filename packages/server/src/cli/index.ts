@@ -6,7 +6,7 @@ import {
   DbContext, ExpressionEvaluator, StepRegistry, registerBuiltInSteps,
   createQueueDriver, RunExecutor, WorkflowWorker,
   DefinitionRepository, validateDefinitionShape, validateAgainstRegistry,
-  createLogger, DELAY_QUEUE, RESPONSE_QUEUE,
+  createLogger, DELAY_QUEUE, RESPONSE_QUEUE, loadPlugins,
 } from "@wfe/core";
 import { loadServerConfig } from "../config";
 import { createApp } from "../app";
@@ -42,6 +42,7 @@ program
     const db = new DbContext(config);
     const registry = new StepRegistry();
     registerBuiltInSteps(registry);
+    await loadPlugins(config.plugins, registry, log);
 
     try {
       await db.runMigrations();
@@ -77,6 +78,7 @@ program
 
     const registry = new StepRegistry();
     registerBuiltInSteps(registry);
+    await loadPlugins(config.plugins, registry, log);
     const evaluator = new ExpressionEvaluator({ timeoutMs: config.expressionTimeoutMs });
 
     let queue;
@@ -111,6 +113,7 @@ program
 
     const registry = new StepRegistry();
     registerBuiltInSteps(registry);
+    await loadPlugins(config.plugins, registry, log);
     const evaluator = new ExpressionEvaluator({ timeoutMs: config.expressionTimeoutMs });
 
     // Import driver module
@@ -140,4 +143,7 @@ program
     process.on("SIGTERM", shutdown);
   });
 
-program.parse();
+program.parseAsync().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -23,7 +23,13 @@ definitions, runs and steps, an OpenAPI spec served at `/api/v1/docs`, a `wfe`
 CLI (`migrate`, `import`, `serve`, `worker`), and a `Dockerfile` plus
 `docker-compose.yml` `server`/`worker` services. See [REST API](#rest-api).
 
-Not built yet: plugin loading and the UI. See [Roadmap](#roadmap).
+**Phase 4: plugins, steps, batch jobs.** Boot-time plugin loading from
+`WFE_PLUGINS`, an expanded step library (`core.http`, `core.condition`,
+`core.subWorkflow`, `core.emitEvent`), definition snapshotting onto the run at
+creation, batch jobs that fan a definition out over many inputs, and a
+`/filter-configuration` endpoint that drives UI filters from the registry.
+
+Not built yet: the React UI. See [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -39,7 +45,7 @@ Not built yet: plugin loading and the UI. See [Roadmap](#roadmap).
 | Package | Contents |
 |---|---|
 | `@wfe/sdk` | Dependency-free types, `WorkflowStatus`, `BaseStep`, `StepContext`. What step authors import. |
-| `@wfe/core` | The engine: entities, migration, expression evaluator, step registry, validation, executor. |
+| `@wfe/core` | The engine: entities, migrations, expression evaluator, step registry, step library, plugin loader, validation, executor, queue drivers, worker. |
 | `@wfe/server` | REST API (Express), OpenAPI spec, auth provider interface, and the `wfe` CLI. See [REST API](#rest-api). |
 
 ```
@@ -231,8 +237,12 @@ in this phase.
 |---|---|
 | `core.noop` | Completes immediately, produces no outputs. |
 | `core.transform` | Writes its resolved inputs straight to its outputs — moves and renames values with no code. |
-| `core.delay` | Suspends the run for its `seconds` input, then completes. See [Queues](#queues). |
+| `core.delay` | Suspends the run for its `seconds` input, then completes. Rejects a non-finite or negative value with `DELAY_INVALID_SECONDS`. See [Queues](#queues). |
 | `core.externalTask` | Dispatches to an external service's queue and waits for its callback. See [Queues](#queues). |
+| `core.http` | Makes an HTTP request. Supports method, headers, body, a timeout, and retry with backoff. |
+| `core.condition` | Evaluates a condition and either continues, skips the rest, or fails the run. |
+| `core.subWorkflow` | Starts a child workflow run and, optionally, waits for it to finish. |
+| `core.emitEvent` | Publishes a message to a named queue without suspending the run. |
 
 ## Writing a step
 
@@ -279,6 +289,56 @@ const executor = new RunExecutor({ config, db, registry, evaluator, services: { 
 To suspend a step rather than complete it, return `suspend` instead of leaving
 it unset. The run is marked `waiting` and the loop stops; a queue driver
 publishes the message that resumes it. See [Queues](#queues).
+
+## Plugins
+
+Steps do not have to live in this repo. A plugin is any module with a callable
+default export that takes the registry and registers step types on it.
+
+```ts
+import { BaseStep, RunStepResponse, StepContext, WorkflowStatus } from "@wfe/sdk";
+import type { StepRegistry } from "@wfe/core";
+
+class EchoStep extends BaseStep {
+  async run(ctx: StepContext): Promise<RunStepResponse> {
+    ctx.step.outputs = { ...ctx.inputs };
+    ctx.step.status = WorkflowStatus.COMPLETE;
+    return { stepState: ctx.step };
+  }
+}
+
+export default function register(registry: StepRegistry): void {
+  registry.register({
+    type: "sample.echo",
+    version: "1.0.0",
+    description: "Echoes its resolved inputs to outputs.",
+    factory: (params) => new EchoStep(params),
+  });
+}
+```
+
+Point `WFE_PLUGINS` at it as a comma-separated list of module specifiers — an
+npm package name or a path:
+
+```bash
+export WFE_PLUGINS=@acme/wfe-steps,./examples/sample-plugin
+```
+
+`wfe migrate`, `wfe serve` and `wfe worker` each load them at boot, after the
+built-in steps are registered, so a plugin can override a built-in type by
+registering the same name. A working example lives in
+`examples/sample-plugin/`.
+
+Loading is strict, because a half-registered registry fails later and further
+from the cause than it needs to:
+
+| Condition | Error |
+|---|---|
+| The module cannot be imported | `PLUGIN_LOAD_FAILED` |
+| It has no callable default export | `PLUGIN_INVALID` |
+
+A `register` function may be async; the loader awaits it before moving to the
+next plugin.
 
 ## Queues
 
@@ -507,6 +567,10 @@ load-balancer probes that don't know about the API version.
 | `PUT` | `/api/v1/steps/:id/inputs-outputs` | Overwrite a step's inputs/outputs. |
 | `PUT` | `/api/v1/steps/:id/priority` | Reprioritize a queued step. |
 | `POST` | `/api/v1/steps/dry-run` | Evaluate a step's expressions without persisting anything. |
+| `GET` | `/api/v1/filter-configuration` | Filter fields and their allowed values, derived from the registry. Drives UI filter controls. |
+| `GET`/`POST` | `/api/v1/batch-jobs` | List / create batch jobs. |
+| `GET` | `/api/v1/batch-jobs/:id` | Read a batch job and its progress. |
+| `PUT` | `/api/v1/batch-jobs/:id/cancel` | Cancel a batch job. |
 
 Every route below `/api/v1/docs` runs behind `tenantMiddleware`, which calls
 the configured `AuthProvider` and stamps `tenantId`/`scopes` onto the
@@ -547,7 +611,7 @@ ahead of a deploy.
 | `WFE_SQS_PREFIX` | *(unset)* | SQS physical queue name prefix. |
 | `WFE_AWS_REGION` / `AWS_REGION` | *(unset)* | SQS region. |
 | `WFE_SERVICES` | `{}` | JSON object of service client config, made available as `services` to steps. |
-| `WFE_PLUGINS` | *(empty)* | Comma-separated plugin list — parsed today, not yet loaded (see [Roadmap](#roadmap)). |
+| `WFE_PLUGINS` | *(empty)* | Comma-separated module specifiers loaded at boot by `migrate`, `serve` and `worker`. See [Plugins](#plugins). |
 
 ### Quickstart with Docker Compose
 
@@ -630,11 +694,11 @@ command.
 | 1 ✅ | Engine core — this repo |
 | 2 ✅ | Queue drivers (SQS, RabbitMQ), delayed and callback-resumed steps — this repo |
 | 3 ✅ | REST API, OpenAPI, CLI, Docker Compose — this repo |
-| 4 | Plugin loading, built-in step library (http, condition, sub-workflow), batch jobs, filter-configuration endpoint, definition snapshotting |
+| 4 ✅ | Plugin loading, built-in step library (http, condition, sub-workflow), batch jobs, filter-configuration endpoint, definition snapshotting — this repo |
 | 5 | React UI — definitions, editor, run tracker |
 
 Design and implementation notes live in `docs/superpowers/`. To pick this build
 up on another machine, start with [`docs/handoff.md`](docs/handoff.md) — setup,
-the verification rules, and what Phase 4 has to settle first. Deferred items
+the verification rules, and what Phase 5 has to settle first. Deferred items
 and their reasons are tracked in
 [`docs/superpowers/carry-forward.md`](docs/superpowers/carry-forward.md).

@@ -239,6 +239,59 @@ export function buildOpenApiSpec(registry: StepRegistry): Record<string, unknown
           responses: { 200: { description: "Evaluation result" } },
         },
       },
+      "/api/v1/batch-jobs": {
+        post: {
+          summary: "Create a batch job (fan out a workflow over N inputs)",
+          operationId: "createBatchJob",
+          tags: ["Batch Jobs"],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object",
+            properties: {
+              name: { type: "string" }, definitionName: { type: "string" },
+              definitionVersion: { type: "string" },
+              inputs: { type: "array", items: { type: "object" } },
+            },
+            required: ["name", "definitionName", "definitionVersion", "inputs"],
+          } } } },
+          responses: { 201: { description: "Batch created and fan-out started" }, 400: { description: "Validation error" } },
+        },
+        get: {
+          summary: "List batch jobs",
+          operationId: "listBatchJobs",
+          tags: ["Batch Jobs"],
+          parameters: [
+            { name: "status", in: "query", schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", default: 50 } },
+            { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+          ],
+          responses: { 200: { description: "Batch jobs" } },
+        },
+      },
+      "/api/v1/batch-jobs/{id}": {
+        get: {
+          summary: "Get batch job with progress",
+          operationId: "getBatchJob",
+          tags: ["Batch Jobs"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Batch job with progress" }, 404: { description: "Not found" } },
+        },
+      },
+      "/api/v1/batch-jobs/{id}/cancel": {
+        put: {
+          summary: "Cancel a batch job and all its runs",
+          operationId: "cancelBatchJob",
+          tags: ["Batch Jobs"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Cancelled" }, 404: { description: "Not found" } },
+        },
+      },
+      "/api/v1/filter-configuration": {
+        get: {
+          summary: "Filter metadata for the UI",
+          operationId: "getFilterConfiguration",
+          tags: ["System"],
+          responses: { 200: { description: "Filter descriptors for definitions, runs, and steps" } },
+        },
+      },
     },
     components: {
       schemas: {
