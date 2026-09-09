@@ -46,6 +46,9 @@ export class WorkflowRun implements WorkflowRunLike {
   @Column({ type: "jsonb", nullable: false, default: () => "'{}'::jsonb" })
   stateJson?: WorkflowParameters;
 
+  @Column({ type: "jsonb", nullable: true })
+  definitionSnapshotJson?: unknown;
+
   @OneToMany(() => StepRun, (step) => step.run, { eager: true, cascade: true })
   stepRuns?: StepRun[];
 
@@ -53,6 +56,7 @@ export class WorkflowRun implements WorkflowRunLike {
   inputs: WorkflowParameters = {};
   outputs: WorkflowParameters = {};
   state: WorkflowParameters = {};
+  definitionSnapshot?: import("@wfe/sdk").WorkflowDefinitionBody;
 
   @BeforeInsert()
   @BeforeUpdate()
@@ -60,6 +64,7 @@ export class WorkflowRun implements WorkflowRunLike {
     this.inputsJson = this.inputs;
     this.outputsJson = this.outputs;
     this.stateJson = this.state;
+    this.definitionSnapshotJson = this.definitionSnapshot;
   }
 
   @AfterLoad()
@@ -67,6 +72,7 @@ export class WorkflowRun implements WorkflowRunLike {
     this.inputs = this.inputsJson ?? {};
     this.outputs = this.outputsJson ?? {};
     this.state = this.stateJson ?? {};
+    this.definitionSnapshot = (this.definitionSnapshotJson as import("@wfe/sdk").WorkflowDefinitionBody) ?? undefined;
     this.stepRuns = this.stepRuns?.sort((a, b) => a.stepNumber - b.stepNumber);
   }
 

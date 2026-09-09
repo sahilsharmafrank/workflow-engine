@@ -9,6 +9,7 @@ import { WorkflowRun } from "../entities/workflow-run";
 import { Init0001 } from "./migrations/0001-init";
 import { QueueSupport0002 } from "./migrations/0002-queue-support";
 import { ServerSupport0003 } from "./migrations/0003-server-support";
+import { DefinitionSnapshot0004 } from "./migrations/0004-definition-snapshot";
 
 export function connectionOptions(config: EngineConfig): DataSourceOptions {
   return {
@@ -16,7 +17,7 @@ export function connectionOptions(config: EngineConfig): DataSourceOptions {
     url: config.dbUrl,
     namingStrategy: new SnakeNamingStrategy(),
     entities: [WorkflowDefinitionEntity, WorkflowRun, StepRun, IdempotencyKeyEntity],
-    migrations: [Init0001, QueueSupport0002, ServerSupport0003],
+    migrations: [Init0001, QueueSupport0002, ServerSupport0003, DefinitionSnapshot0004],
     synchronize: false,
     logging: config.showSql ?? false,
   };

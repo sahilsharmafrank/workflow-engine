@@ -85,6 +85,7 @@ export class WorkflowManager {
     run.version = input.version;
     run.currentStep = -1;
     run.status = WorkflowStatus.STARTING;
+    run.definitionSnapshot = definition.definition;
     run.inputs = input.inputs;
     run.outputs = {};
     run.state = {};

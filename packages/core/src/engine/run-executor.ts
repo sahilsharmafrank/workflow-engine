@@ -36,6 +36,10 @@ export class RunExecutor extends WorkflowManager {
   }
 
   protected async definitionStepsFor(run: WorkflowRun): Promise<StepDefinition[]> {
+    if (run.definitionSnapshot) {
+      return run.definitionSnapshot.steps;
+    }
+    // Legacy path: runs created before definition snapshotting was added.
     const definition = await this.lookupDefinition({
       tenantId: run.tenantId, name: run.name, version: run.version,
       inputs: {}, definitionId: run.definitionId,
