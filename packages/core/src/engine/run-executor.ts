@@ -453,7 +453,11 @@ export class RunExecutor extends WorkflowManager {
     }
     run.currentStep = stepNumber;
     run.status = WorkflowStatus.RUNNING;
-    await this.runs.save(run);
+    // saveWithSteps, not save: resetting every step from stepNumber onward can
+    // modify several stepRuns at once, and a single cascaded save() of the run
+    // plus multiple steps trips the pg client.query() deprecation (see
+    // RunRepository.saveWithSteps for the full explanation).
+    await this.runs.saveWithSteps(run);
 
     return this.run(tenantId, runId, stepNumber);
   }

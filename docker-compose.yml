@@ -22,3 +22,31 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  server:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      WFE_DB_URL: postgres://postgres:postgres@postgres:5432/wfe
+      WFE_QUEUE_DRIVER: rabbitmq
+      WFE_QUEUE_URL: amqp://rabbitmq:5672
+      WFE_PORT: "3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["node", "packages/server/dist/cli/index.js", "worker"]
+    environment:
+      WFE_DB_URL: postgres://postgres:postgres@postgres:5432/wfe
+      WFE_QUEUE_DRIVER: rabbitmq
+      WFE_QUEUE_URL: amqp://rabbitmq:5672
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy

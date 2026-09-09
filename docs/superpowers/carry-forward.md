@@ -27,21 +27,22 @@ earlier text listing "per-service request queues" among the engine's subscriptio
 was marked as inherited from the original `remote-agent-response-listener` and
 corrected.
 
-### pg deprecation warning
+### ~~pg deprecation warning~~ (resolved, Phase 3)
 
-Full-suite output carries:
-
-```
-DeprecationWarning: Calling client.query() when the client is already executing
-a query is deprecated and will be removed in pg@9.0
-```
-
-It appears under Phase 1 suites (`db/persistence`, `engine/start-workflow`), so
-it predates Phase 2, but it sits next to the `SELECT … FOR UPDATE` locking path
-and becomes a hard failure on `pg@9`. It is also the only thing keeping suite
-output from being pristine.
-
-**Phase 3.** Find the overlapping query and await it properly.
+**Resolution:** The overlapping query was not in the `saveChecked` locking
+path — `node --trace-deprecation` traced it to `RunExecutor.restartFromStep`.
+`WorkflowRun.stepRuns` cascades (`cascade: true`), and restarting from an
+early step resets it and every step after it, so a single `save(run)` handed
+TypeORM's `SubjectExecutor` more than one UPDATE subject (the run plus
+several steps). `executeUpdateOperations` fires those with `Promise.all`,
+and every subject in one `save()` call shares the same underlying `pg`
+`Client`, so the second query started before the first's response had
+arrived — `pg` queues it rather than failing, but logs the deprecation.
+Fixed by adding `RunRepository.saveWithSteps`, which persists each modified
+step sequentially inside a transaction before saving the run (with
+`stepRuns` temporarily cleared so it isn't cascaded a second time). Suite
+output is now clean — verified with
+`npm run build && npm test 2>&1 | grep -i deprecation` (no output).
 
 ### `delay-step.ts` has no NaN guard
 

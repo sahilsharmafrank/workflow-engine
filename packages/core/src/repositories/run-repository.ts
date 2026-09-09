@@ -1,6 +1,7 @@
 import { WorkflowParameters, WorkflowStatus } from "@wfe/sdk";
 import { QueryFailedError } from "typeorm";
 import { DbContext } from "../db/db-context";
+import { StepRun } from "../entities/step-run";
 import { WorkflowRun } from "../entities/workflow-run";
 import { WfeError } from "../errors";
 
@@ -14,6 +15,42 @@ export class RunRepository {
   async save(run: WorkflowRun): Promise<WorkflowRun> {
     const ds = await this.db.getDataSource();
     return ds.getRepository(WorkflowRun).save(run);
+  }
+
+  /**
+   * Saves `run` together with any populated `stepRuns`, one query at a time.
+   *
+   * `WorkflowRun.stepRuns` cascades (`cascade: true`), so a plain `save(run)`
+   * with more than one modified step (e.g. restarting from an early step
+   * resets it and every step after it) hands TypeORM's `SubjectExecutor` more
+   * than one UPDATE subject. `executeUpdateOperations` fires those with
+   * `Promise.all`, and since every subject in one `save()` call shares the
+   * same `QueryRunner` — and therefore the same underlying `pg` `Client` —
+   * the second query starts before the first's response has arrived. `pg`
+   * queues it rather than failing, but logs the "client.query() when the
+   * client is already executing a query" deprecation (removed in pg@9).
+   *
+   * Saving each step first, sequentially awaited, then saving the run with
+   * `stepRuns` temporarily cleared keeps every query on this connection
+   * strictly one-at-a-time. Both loop and final save run inside one
+   * transaction, so this stays atomic like the single-call version did.
+   */
+  async saveWithSteps(run: WorkflowRun): Promise<WorkflowRun> {
+    const ds = await this.db.getDataSource();
+    const steps = run.stepRuns;
+    return ds.manager.transaction(async (manager) => {
+      for (const step of steps ?? []) {
+        await manager.getRepository(StepRun).save(step);
+      }
+      run.stepRuns = undefined;
+      try {
+        const saved = await manager.getRepository(WorkflowRun).save(run);
+        saved.stepRuns = steps;
+        return saved;
+      } finally {
+        run.stepRuns = steps;
+      }
+    });
   }
 
   /**

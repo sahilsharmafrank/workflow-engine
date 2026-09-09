@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+**/coverage
+.git
+.turbo
+**/.turbo
+*.log
+.superpowers
+# Stale incremental-build metadata: if copied in without its matching `dist/`
+# (excluded above), `tsc` trusts it, believes output is already up to date,
+# and silently skips emitting — breaking the in-container build.
+**/*.tsbuildinfo

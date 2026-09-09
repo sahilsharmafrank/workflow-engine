@@ -18,8 +18,12 @@ behind a registry, delay and callback suspension with delay chaining past a
 driver's own limit, and a `WorkflowWorker` that resumes runs from a queue. See
 [Queues](#queues).
 
-Not built yet: the REST API, plugin loading, and the UI. See
-[Roadmap](#roadmap).
+**Phase 3: REST API, CLI, Docker Compose.** An Express-based HTTP API over
+definitions, runs and steps, an OpenAPI spec served at `/api/v1/docs`, a `wfe`
+CLI (`migrate`, `import`, `serve`, `worker`), and a `Dockerfile` plus
+`docker-compose.yml` `server`/`worker` services. See [REST API](#rest-api).
+
+Not built yet: plugin loading and the UI. See [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -36,6 +40,7 @@ Not built yet: the REST API, plugin loading, and the UI. See
 |---|---|
 | `@wfe/sdk` | Dependency-free types, `WorkflowStatus`, `BaseStep`, `StepContext`. What step authors import. |
 | `@wfe/core` | The engine: entities, migration, expression evaluator, step registry, validation, executor. |
+| `@wfe/server` | REST API (Express), OpenAPI spec, auth provider interface, and the `wfe` CLI. See [REST API](#rest-api). |
 
 ```
 packages/sdk/src      types, status model, BaseStep, StepContext
@@ -51,6 +56,14 @@ packages/core/src
   engine/             WorkflowManager (create) + RunExecutor (execute) + suspension planning
   queue/              QueueDriver contract, registry, memory/RabbitMQ/SQS drivers
   worker/             WorkflowWorker — consumes the delay and response queues
+packages/server/src
+  app.ts              createApp() — wires middleware + routers into an Express app
+  config.ts           ServerConfig + loadServerConfig
+  cli/                the `wfe` binary — migrate, import, serve, worker
+  controllers/        route handlers: definitions, runs, steps, system
+  middleware/         request id, tenant resolution, error handler
+  auth/               AuthProvider interface + NoneAuthProvider
+  openapi/            buildOpenApiSpec() served at /api/v1/docs
 examples/             runnable examples + sample definitions
 ```
 
@@ -459,6 +472,101 @@ Other lifecycle calls: `executor.cancel(tenantId, runId)` and
 `executor.restartFromStep(tenantId, runId, stepNumber)`, which resets that step
 and every step after it before re-running.
 
+## REST API
+
+`@wfe/server` wraps the engine in an Express app (`createApp()`) and a CLI
+(`wfe`) that boots it. Every application route lives under the base path
+**`/api/v1`**; `/health` and `/version` are also mounted unprefixed for
+load-balancer probes that don't know about the API version.
+
+### Routes
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/health` | Liveness probe. Unauthenticated. |
+| `GET` | `/api/v1/version` | Package version. Unauthenticated. |
+| `GET` | `/api/v1/openapi.json` | Raw OpenAPI document. |
+| `GET` | `/api/v1/docs` | Swagger UI over the same spec. |
+| `GET`/`POST` | `/api/v1/definitions` | List / create workflow definitions. |
+| `GET`/`PUT` | `/api/v1/definitions/:id` | Read / update a draft definition. |
+| `POST` | `/api/v1/definitions/:id/publish` | Publish a draft. |
+| `POST` | `/api/v1/definitions/import` | Bulk-import definitions (same shape as the CLI's `import`). |
+| `POST` | `/api/v1/runs` | Start a new run. |
+| `GET` | `/api/v1/runs` | List runs (filter by `status`, `name`; paginated). |
+| `POST` | `/api/v1/runs/search` | Filter runs by jsonb-contained `inputs`/`outputs`/`state`. |
+| `POST` | `/api/v1/runs/by-ids` | Batch-fetch runs by id. |
+| `GET` | `/api/v1/runs/:id` | Read a run and its steps. |
+| `PUT` | `/api/v1/runs/:id/cancel` | Cancel a run. |
+| `PUT` | `/api/v1/runs/:id/restart/step/:n` | Restart from step `n`, resetting it and everything after it. |
+| `PUT` | `/api/v1/runs/:id/callback` | Deliver an external callback to a suspended step (HTTP counterpart of `RESPONSE_QUEUE`). |
+| `PUT` | `/api/v1/runs/:id/inputs` | Overwrite a run's captured inputs. |
+| `GET` | `/api/v1/step-types` | List step types known to the registry. |
+| `GET` | `/api/v1/steps/next` | Claim the next runnable step (polling consumers). |
+| `POST` | `/api/v1/steps/search` | Filter step rows. |
+| `PUT` | `/api/v1/steps/:id/state` | Overwrite a step's captured state. |
+| `PUT` | `/api/v1/steps/:id/inputs-outputs` | Overwrite a step's inputs/outputs. |
+| `PUT` | `/api/v1/steps/:id/priority` | Reprioritize a queued step. |
+| `POST` | `/api/v1/steps/dry-run` | Evaluate a step's expressions without persisting anything. |
+
+Every route below `/api/v1/docs` runs behind `tenantMiddleware`, which calls
+the configured `AuthProvider` and stamps `tenantId`/`scopes` onto the
+request — a null result is a 401. The only provider shipped so far is
+`NoneAuthProvider` (accepts every request under tenant `"default"`); it is a
+placeholder; a real provider is a follow-on Phase 3/4 concern once the API
+has external callers, not a `WFE_AUTH_PROVIDER` value that already does
+anything today.
+
+### CLI
+
+The `wfe` binary (`packages/server/dist/cli/index.js`, published as `bin.wfe`)
+wraps the same building blocks the API and examples use:
+
+```bash
+wfe migrate            # run pending migrations, then exit
+wfe import <dir>       # validate + publish every *.json definition in <dir>
+wfe serve               # run migrations, then start the HTTP API (createApp())
+wfe worker              # run migrations, then start WorkflowWorker (no HTTP)
+```
+
+`serve` and `worker` both call `db.runMigrations()` on boot, so a fresh
+Postgres is ready to use without a separate migrate step in development;
+`migrate` exists for pipelines that want that as an explicit, auditable step
+ahead of a deploy.
+
+### Configuration
+
+`loadServerConfig()` reads everything `loadEngineConfig()` does (see
+[Configuration](#configuration)) plus:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `WFE_PORT` | `3000` | HTTP port for `wfe serve`. |
+| `WFE_AUTH_PROVIDER` | `none` | Selects the `AuthProvider`. Only `none` (`NoneAuthProvider`) exists today. |
+| `WFE_QUEUE_DRIVER` | `memory` | `memory`, `rabbitmq`, or `sqs` — passed to `createQueueDriver`. |
+| `WFE_QUEUE_URL` | *(unset)* | Broker URL. Required for `rabbitmq`; ignored by `memory`. |
+| `WFE_SQS_PREFIX` | *(unset)* | SQS physical queue name prefix. |
+| `WFE_AWS_REGION` / `AWS_REGION` | *(unset)* | SQS region. |
+| `WFE_SERVICES` | `{}` | JSON object of service client config, made available as `services` to steps. |
+| `WFE_PLUGINS` | *(empty)* | Comma-separated plugin list — parsed today, not yet loaded (see [Roadmap](#roadmap)). |
+
+### Quickstart with Docker Compose
+
+`docker-compose.yml` now brings up Postgres, RabbitMQ, the API server, and a
+worker together:
+
+```bash
+docker compose up -d --build
+curl http://localhost:3000/api/v1/health
+open http://localhost:3000/api/v1/docs   # Swagger UI
+docker compose down
+```
+
+`server` and `worker` both build from the repo-root `Dockerfile` (Node 24
+Alpine — `npm ci`, `npm run build`, then run the CLI); `worker` overrides the
+image's default `CMD` (`wfe serve`) to run `wfe worker` instead. Both wait on
+`postgres` and `rabbitmq`'s healthchecks before starting, and are wired to
+the same credentials as [Local Postgres and RabbitMQ](#local-postgres-and-rabbitmq).
+
 ## Database
 
 One squashed migration (`Init1788755800916`) creates three tables:
@@ -521,10 +629,12 @@ command.
 |---|---|
 | 1 ✅ | Engine core — this repo |
 | 2 ✅ | Queue drivers (SQS, RabbitMQ), delayed and callback-resumed steps — this repo |
-| 3 | REST API, OpenAPI, CLI, Docker Compose |
-| 4 | Plugin loading, built-in step library (http, condition, sub-workflow) |
+| 3 ✅ | REST API, OpenAPI, CLI, Docker Compose — this repo |
+| 4 | Plugin loading, built-in step library (http, condition, sub-workflow), batch jobs, filter-configuration endpoint, definition snapshotting |
 | 5 | React UI — definitions, editor, run tracker |
 
 Design and implementation notes live in `docs/superpowers/`. To pick this build
 up on another machine, start with [`docs/handoff.md`](docs/handoff.md) — setup,
-the verification rules, and what Phase 3 has to settle first.
+the verification rules, and what Phase 4 has to settle first. Deferred items
+and their reasons are tracked in
+[`docs/superpowers/carry-forward.md`](docs/superpowers/carry-forward.md).
