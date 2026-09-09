@@ -1,7 +1,8 @@
 # Handoff — continuing this build on another machine
 
-Everything needed to pick this project up cold. Phases 1–3 are merged to `main`;
-Phase 4 is built on `feat/rest-api-cli` and pending review. Phases 5–6 are
+Everything needed to pick this project up cold. Phases 1 and 2 are merged to
+`main`. Phases 3 and 4 are both built on `feat/rest-api-cli` and not yet
+merged — that branch carries 18 commits ahead of `main`. Phases 5–6 are
 unbuilt.
 
 Read this alongside three files that are the real authorities:
@@ -47,13 +48,13 @@ drivers (in-memory with a virtual clock, RabbitMQ with bucketed TTL holding
 queues, SQS with a long-poll loop); executor-owned enqueueing with delay
 chaining; callback resumption; `WorkflowWorker`; compose file; delayed example.
 
-**Phase 3 (merged)** — `@wfe/server`: an Express REST API over definitions, runs
+**Phase 3 (built, unmerged)** — `@wfe/server`: an Express REST API over definitions, runs
 and steps; an OpenAPI 3 document served at `/api/v1/docs`; the `wfe` CLI
 (`migrate`, `import`, `serve`, `worker`); a `Dockerfile` and compose
 `server`/`worker` services. Auth is deliberately `none` in v1 — the expression
 sandbox is the only security boundary.
 
-**Phase 4 (built, pending review)** — the plugin loader (`WFE_PLUGINS`) plus a
+**Phase 4 (built, unmerged)** — the plugin loader (`WFE_PLUGINS`) plus a
 sample plugin package; `core.http`, `core.condition`, `core.subWorkflow` and
 `core.emitEvent` steps; `StepContext` gaining `queue` and `startChildWorkflow`;
 definition snapshotting onto the run at creation; batch jobs (entity,
@@ -66,7 +67,7 @@ repository, migration, controller); and a filter-configuration endpoint.
 ```
 @wfe/core     30 suites / 176 tests
 @wfe/sdk       3 suites /  12 tests
-@wfe/server    6 suites /  41 tests
+@wfe/server    6 suites /  42 tests
 ```
 
 Run the suite rather than trusting these; they move every phase.
