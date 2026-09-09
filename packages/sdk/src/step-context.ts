@@ -19,6 +19,16 @@ export interface StepContext {
   body?: unknown;
   /** False on first entry into this step, true when a resume message re-entered it. */
   isResume: boolean;
+  /** Queue access for steps that publish messages (e.g. core.emitEvent). */
+  queue?: {
+    publish(queue: string, msg: unknown): Promise<void>;
+  };
+  /** Starts a child workflow run. Provided by the executor, bound to the current tenantId. */
+  startChildWorkflow?: (input: {
+    name: string;
+    version: string;
+    inputs: WorkflowParameters;
+  }) => Promise<number>;
 }
 
 /**

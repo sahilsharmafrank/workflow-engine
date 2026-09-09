@@ -53,7 +53,7 @@ describe("StepRegistry", () => {
     const registry = new StepRegistry();
     registerBuiltInSteps(registry);
     expect(registry.list().map((r) => r.type).sort()).toEqual([
-      "core.delay", "core.externalTask", "core.noop", "core.transform",
+      "core.condition", "core.delay", "core.emitEvent", "core.externalTask", "core.noop", "core.transform",
     ]);
   });
 

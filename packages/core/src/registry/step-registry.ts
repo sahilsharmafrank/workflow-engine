@@ -1,6 +1,8 @@
 import { BaseStep, StepFactory, StepParams } from "@wfe/sdk";
 import { WfeError } from "../errors";
+import { ConditionStep } from "../steps/condition-step";
 import { DelayStep } from "../steps/delay-step";
+import { EmitEventStep } from "../steps/emit-event-step";
 import { ExternalTaskStep } from "../steps/external-task-step";
 import { NoopStep } from "../steps/noop-step";
 import { TransformStep } from "../steps/transform-step";
@@ -69,5 +71,17 @@ export function registerBuiltInSteps(registry: StepRegistry): void {
     version: "1.0.0",
     description: "Suspends the run for a number of seconds, then completes.",
     factory: (params) => new DelayStep(params),
+  });
+  registry.register({
+    type: "core.condition",
+    version: "1.0.0",
+    description: "Evaluates a boolean condition; skips or fails when falsy.",
+    factory: (params) => new ConditionStep(params),
+  });
+  registry.register({
+    type: "core.emitEvent",
+    version: "1.0.0",
+    description: "Publishes a payload to a named queue.",
+    factory: (params) => new EmitEventStep(params),
   });
 }

@@ -26,5 +26,7 @@ export * from "./queue/memory-driver";
 export * from "./queue/names";
 export * from "./engine/suspension";
 export * from "./worker/worker";
+export * from "./steps/condition-step";
 export * from "./steps/delay-step";
+export * from "./steps/emit-event-step";
 export * from "./steps/external-task-step";
