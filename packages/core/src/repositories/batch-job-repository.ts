@@ -64,9 +64,9 @@ export class BatchJobRepository {
     let failedCount = 0;
     let runningCount = 0;
     for (const row of rows) {
-      if (row.status === "COMPLETE") completedCount = Number(row.count);
-      else if (row.status === "FAILED") failedCount = Number(row.count);
-      else if (row.status === "RUNNING" || row.status === "STARTING" || row.status === "WAITING") {
+      if (row.status === "complete") completedCount = Number(row.count);
+      else if (row.status === "failed") failedCount = Number(row.count);
+      else if (row.status === "running" || row.status === "starting" || row.status === "waiting") {
         runningCount += Number(row.count);
       }
     }
