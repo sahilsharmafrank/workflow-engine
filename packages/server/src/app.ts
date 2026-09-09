@@ -5,6 +5,7 @@ import { errorHandler } from "./middleware/error-handler";
 import { tenantMiddleware } from "./middleware/tenant";
 import { requestIdMiddleware } from "./middleware/request-id";
 import { systemRoutes } from "./controllers/system";
+import { definitionRoutes } from "./controllers/definitions";
 
 export interface AppDeps {
   executor: RunExecutor;
@@ -27,7 +28,7 @@ export function createApp(deps: AppDeps): Express {
   // All /api/v1 routes below this point require tenant resolution
   app.use("/api/v1", tenantMiddleware(deps.authProvider));
 
-  // Route controllers will be mounted here in Tasks 2–5
+  app.use("/api/v1", definitionRoutes({ db: deps.db, registry: deps.registry }));
 
   app.use(errorHandler());
 

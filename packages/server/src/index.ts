@@ -6,3 +6,4 @@ export * from "./middleware/error-handler";
 export * from "./middleware/tenant";
 export * from "./middleware/request-id";
 export * from "./controllers/system";
+export * from "./controllers/definitions";
