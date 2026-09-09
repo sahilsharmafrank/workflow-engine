@@ -1,5 +1,5 @@
 import express, { Express } from "express";
-import { RunExecutor, StepRegistry, DbContext, QueueDriver } from "@wfe/core";
+import { RunExecutor, StepRegistry, DbContext, QueueDriver, ExpressionEvaluator } from "@wfe/core";
 import { AuthProvider } from "./auth/types";
 import { errorHandler } from "./middleware/error-handler";
 import { tenantMiddleware } from "./middleware/tenant";
@@ -7,12 +7,14 @@ import { requestIdMiddleware } from "./middleware/request-id";
 import { systemRoutes } from "./controllers/system";
 import { definitionRoutes } from "./controllers/definitions";
 import { runRoutes } from "./controllers/runs";
+import { stepRoutes } from "./controllers/steps";
 
 export interface AppDeps {
   executor: RunExecutor;
   db: DbContext;
   registry: StepRegistry;
   authProvider: AuthProvider;
+  evaluator: ExpressionEvaluator;
   queue?: QueueDriver;
 }
 
@@ -31,6 +33,7 @@ export function createApp(deps: AppDeps): Express {
 
   app.use("/api/v1", definitionRoutes({ db: deps.db, registry: deps.registry }));
   app.use("/api/v1", runRoutes({ executor: deps.executor, db: deps.db }));
+  app.use("/api/v1", stepRoutes({ db: deps.db, registry: deps.registry, evaluator: deps.evaluator }));
 
   app.use(errorHandler());
 

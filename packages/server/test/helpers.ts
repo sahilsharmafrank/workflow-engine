@@ -37,6 +37,7 @@ export async function createTestApp(container: StartedPostgreSqlContainer): Prom
     db,
     registry,
     authProvider: new NoneAuthProvider(),
+    evaluator,
     queue,
   });
 

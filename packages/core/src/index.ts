@@ -12,6 +12,7 @@ export * from "./entities/idempotency-key";
 export * from "./db/db-context";
 export * from "./repositories/definition-repository";
 export * from "./repositories/run-repository";
+export * from "./repositories/step-repository";
 export * from "./registry/step-registry";
 export * from "./registry/validate";
 export * from "./steps/noop-step";
