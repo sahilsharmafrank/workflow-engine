@@ -90,6 +90,16 @@ export function batchJobRoutes(deps: { executor: RunExecutor; db: DbContext }): 
         return;
       }
 
+      if (job.status === "complete" || job.status === "failed" || job.status === "cancelled") {
+        res.status(409).json({
+          error: {
+            code: "BATCH_JOB_NOT_CANCELLABLE",
+            message: `Batch job ${job.id} is already ${job.status} and cannot be cancelled`,
+          },
+        });
+        return;
+      }
+
       // Cancel all non-terminal runs
       for (const runId of job.runIds) {
         try {

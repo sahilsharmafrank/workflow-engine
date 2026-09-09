@@ -324,10 +324,12 @@ npm package name or a path:
 export WFE_PLUGINS=@acme/wfe-steps,./examples/sample-plugin
 ```
 
-`wfe migrate`, `wfe serve` and `wfe worker` each load them at boot, after the
+`wfe import`, `wfe serve` and `wfe worker` each load them at boot, after the
 built-in steps are registered, so a plugin can override a built-in type by
-registering the same name. A working example lives in
-`examples/sample-plugin/`.
+registering the same name. `wfe migrate` does not — it never builds a registry.
+`import` does, because publishing a definition validates every `stepType`
+against the registry, and a definition using a plugin's step type would
+otherwise be rejected. A working example lives in `examples/sample-plugin/`.
 
 Loading is strict, because a half-registered registry fails later and further
 from the cause than it needs to:
@@ -611,7 +613,7 @@ ahead of a deploy.
 | `WFE_SQS_PREFIX` | *(unset)* | SQS physical queue name prefix. |
 | `WFE_AWS_REGION` / `AWS_REGION` | *(unset)* | SQS region. |
 | `WFE_SERVICES` | `{}` | JSON object of service client config, made available as `services` to steps. |
-| `WFE_PLUGINS` | *(empty)* | Comma-separated module specifiers loaded at boot by `migrate`, `serve` and `worker`. See [Plugins](#plugins). |
+| `WFE_PLUGINS` | *(empty)* | Comma-separated module specifiers loaded at boot by `import`, `serve` and `worker`. See [Plugins](#plugins). |
 
 ### Quickstart with Docker Compose
 
