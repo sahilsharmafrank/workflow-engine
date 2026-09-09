@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { DataSource, DataSourceOptions } from "typeorm";
 import { SnakeNamingStrategy } from "typeorm-naming-strategies";
 import { EngineConfig } from "../config";
+import { BatchJob } from "../entities/batch-job";
 import { IdempotencyKeyEntity } from "../entities/idempotency-key";
 import { StepRun } from "../entities/step-run";
 import { WorkflowDefinitionEntity } from "../entities/workflow-definition";
@@ -10,14 +11,15 @@ import { Init0001 } from "./migrations/0001-init";
 import { QueueSupport0002 } from "./migrations/0002-queue-support";
 import { ServerSupport0003 } from "./migrations/0003-server-support";
 import { DefinitionSnapshot0004 } from "./migrations/0004-definition-snapshot";
+import { BatchJobs0005 } from "./migrations/0005-batch-jobs";
 
 export function connectionOptions(config: EngineConfig): DataSourceOptions {
   return {
     type: "postgres",
     url: config.dbUrl,
     namingStrategy: new SnakeNamingStrategy(),
-    entities: [WorkflowDefinitionEntity, WorkflowRun, StepRun, IdempotencyKeyEntity],
-    migrations: [Init0001, QueueSupport0002, ServerSupport0003, DefinitionSnapshot0004],
+    entities: [WorkflowDefinitionEntity, WorkflowRun, StepRun, IdempotencyKeyEntity, BatchJob],
+    migrations: [Init0001, QueueSupport0002, ServerSupport0003, DefinitionSnapshot0004, BatchJobs0005],
     synchronize: false,
     logging: config.showSql ?? false,
   };
