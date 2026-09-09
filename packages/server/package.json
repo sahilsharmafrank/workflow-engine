@@ -1,0 +1,32 @@
+{
+  "name": "@wfe/server",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "engines": {
+    "node": "^24.0.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@wfe/core": "0.1.0",
+    "@wfe/sdk": "0.1.0",
+    "commander": "^13.1.0",
+    "express": "^4.21.0",
+    "swagger-ui-express": "^5.0.0"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.1.0",
+    "@types/express": "^5.0.0",
+    "@types/swagger-ui-express": "^4.1.0",
+    "supertest": "^7.1.0",
+    "@types/supertest": "^6.0.0"
+  }
+}
