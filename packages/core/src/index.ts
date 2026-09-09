@@ -14,6 +14,7 @@ export * from "./repositories/definition-repository";
 export * from "./repositories/run-repository";
 export * from "./repositories/step-repository";
 export * from "./registry/step-registry";
+export * from "./registry/plugin-loader";
 export * from "./registry/validate";
 export * from "./steps/noop-step";
 export * from "./steps/transform-step";
