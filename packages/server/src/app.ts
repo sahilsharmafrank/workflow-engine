@@ -6,6 +6,7 @@ import { tenantMiddleware } from "./middleware/tenant";
 import { requestIdMiddleware } from "./middleware/request-id";
 import { systemRoutes } from "./controllers/system";
 import { definitionRoutes } from "./controllers/definitions";
+import { runRoutes } from "./controllers/runs";
 
 export interface AppDeps {
   executor: RunExecutor;
@@ -29,6 +30,7 @@ export function createApp(deps: AppDeps): Express {
   app.use("/api/v1", tenantMiddleware(deps.authProvider));
 
   app.use("/api/v1", definitionRoutes({ db: deps.db, registry: deps.registry }));
+  app.use("/api/v1", runRoutes({ executor: deps.executor, db: deps.db }));
 
   app.use(errorHandler());
 

@@ -2,19 +2,21 @@ import "reflect-metadata";
 import { DataSource, DataSourceOptions } from "typeorm";
 import { SnakeNamingStrategy } from "typeorm-naming-strategies";
 import { EngineConfig } from "../config";
+import { IdempotencyKeyEntity } from "../entities/idempotency-key";
 import { StepRun } from "../entities/step-run";
 import { WorkflowDefinitionEntity } from "../entities/workflow-definition";
 import { WorkflowRun } from "../entities/workflow-run";
 import { Init0001 } from "./migrations/0001-init";
 import { QueueSupport0002 } from "./migrations/0002-queue-support";
+import { ServerSupport0003 } from "./migrations/0003-server-support";
 
 export function connectionOptions(config: EngineConfig): DataSourceOptions {
   return {
     type: "postgres",
     url: config.dbUrl,
     namingStrategy: new SnakeNamingStrategy(),
-    entities: [WorkflowDefinitionEntity, WorkflowRun, StepRun],
-    migrations: [Init0001, QueueSupport0002],
+    entities: [WorkflowDefinitionEntity, WorkflowRun, StepRun, IdempotencyKeyEntity],
+    migrations: [Init0001, QueueSupport0002, ServerSupport0003],
     synchronize: false,
     logging: config.showSql ?? false,
   };

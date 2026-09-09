@@ -8,6 +8,7 @@ export * from "./entities/progress";
 export * from "./entities/workflow-definition";
 export * from "./entities/workflow-run";
 export * from "./entities/step-run";
+export * from "./entities/idempotency-key";
 export * from "./db/db-context";
 export * from "./repositories/definition-repository";
 export * from "./repositories/run-repository";

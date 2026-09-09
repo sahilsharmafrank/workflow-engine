@@ -1,4 +1,4 @@
-import { WorkflowStatus } from "@wfe/sdk";
+import { WorkflowParameters, WorkflowStatus } from "@wfe/sdk";
 import { QueryFailedError } from "typeorm";
 import { DbContext } from "../db/db-context";
 import { WorkflowRun } from "../entities/workflow-run";
@@ -113,5 +113,64 @@ export class RunRepository {
       [id, tenantId]
     );
     return rows[0]?.status ?? null;
+  }
+
+  async list(
+    tenantId: string,
+    opts: { status?: string; name?: string; limit?: number; offset?: number } = {}
+  ): Promise<{ rows: WorkflowRun[]; total: number }> {
+    const ds = await this.db.getDataSource();
+    const qb = ds.getRepository(WorkflowRun).createQueryBuilder("r")
+      .where("r.tenantId = :tenantId", { tenantId });
+
+    if (opts.status) qb.andWhere("r.status = :status", { status: opts.status });
+    if (opts.name) qb.andWhere("r.name = :name", { name: opts.name });
+
+    qb.orderBy("r.updatedDate", "DESC");
+    qb.skip(opts.offset ?? 0).take(opts.limit ?? 50);
+
+    const [rows, total] = await qb.getManyAndCount();
+    return { rows, total };
+  }
+
+  async search(tenantId: string, filter: Record<string, unknown>): Promise<WorkflowRun[]> {
+    const ds = await this.db.getDataSource();
+    const qb = ds.getRepository(WorkflowRun).createQueryBuilder("r")
+      .where("r.tenantId = :tenantId", { tenantId });
+
+    // Each key like "inputs.foo" becomes a jsonb containment check
+    for (const [key, value] of Object.entries(filter)) {
+      const [column, ...path] = key.split(".");
+      const jsonColumn = `${column}Json`;
+      const paramName = `filter_${path.join("_")}`;
+      if (path.length > 0) {
+        const nested = path.reduceRight<unknown>((acc, k) => ({ [k]: acc }), value);
+        qb.andWhere(`r.${jsonColumn} @> :${paramName}`, {
+          [paramName]: JSON.stringify(nested),
+        });
+      }
+    }
+
+    qb.orderBy("r.updatedDate", "DESC").take(100);
+    return qb.getMany();
+  }
+
+  async findByIds(tenantId: string, ids: number[]): Promise<WorkflowRun[]> {
+    if (ids.length === 0) return [];
+    const ds = await this.db.getDataSource();
+    return ds.getRepository(WorkflowRun).createQueryBuilder("r")
+      .where("r.tenantId = :tenantId", { tenantId })
+      .andWhere("r.id IN (:...ids)", { ids })
+      .getMany();
+  }
+
+  async updateInputs(tenantId: string, id: number, inputs: WorkflowParameters): Promise<WorkflowRun> {
+    const run = await this.findById(tenantId, id);
+    if (!run) {
+      throw new WfeError(`Run ${id} not found`, { statusCode: 404, code: "RUN_NOT_FOUND" });
+    }
+    run.inputs = inputs;
+    const ds = await this.db.getDataSource();
+    return ds.getRepository(WorkflowRun).save(run);
   }
 }
