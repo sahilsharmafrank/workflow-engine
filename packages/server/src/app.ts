@@ -1,4 +1,5 @@
 import express, { Express } from "express";
+import swaggerUi from "swagger-ui-express";
 import { RunExecutor, StepRegistry, DbContext, QueueDriver, ExpressionEvaluator } from "@wfe/core";
 import { AuthProvider } from "./auth/types";
 import { errorHandler } from "./middleware/error-handler";
@@ -8,6 +9,7 @@ import { systemRoutes } from "./controllers/system";
 import { definitionRoutes } from "./controllers/definitions";
 import { runRoutes } from "./controllers/runs";
 import { stepRoutes } from "./controllers/steps";
+import { buildOpenApiSpec } from "./openapi/spec";
 
 export interface AppDeps {
   executor: RunExecutor;
@@ -26,7 +28,10 @@ export function createApp(deps: AppDeps): Express {
 
   // Health and version are unauthenticated and unlogged
   app.use(systemRoutes());
-  app.use("/api/v1", systemRoutes());
+  app.use("/api/v1", systemRoutes({ registry: deps.registry }));
+
+  const spec = buildOpenApiSpec(deps.registry);
+  app.use("/api/v1/docs", swaggerUi.serve, swaggerUi.setup(spec));
 
   // All /api/v1 routes below this point require tenant resolution
   app.use("/api/v1", tenantMiddleware(deps.authProvider));

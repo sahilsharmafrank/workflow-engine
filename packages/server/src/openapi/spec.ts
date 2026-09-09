@@ -1,0 +1,255 @@
+import { StepRegistry } from "@wfe/core";
+
+export function buildOpenApiSpec(registry: StepRegistry): Record<string, unknown> {
+  const stepTypes = registry.list().map((r) => ({
+    type: r.type, version: r.version, description: r.description ?? "",
+  }));
+
+  return {
+    openapi: "3.0.3",
+    info: {
+      title: "Workflow Engine API",
+      version: "0.1.0",
+      description: "REST API for the standalone workflow engine.",
+    },
+    paths: {
+      "/api/v1/health": {
+        get: {
+          summary: "Health check",
+          operationId: "getHealth",
+          tags: ["System"],
+          responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "object", properties: { status: { type: "string" } } } } } } },
+        },
+      },
+      "/api/v1/version": {
+        get: {
+          summary: "Version info",
+          operationId: "getVersion",
+          tags: ["System"],
+          responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "object", properties: { version: { type: "string" } } } } } } },
+        },
+      },
+      "/api/v1/definitions": {
+        get: {
+          summary: "List workflow definitions",
+          operationId: "listDefinitions",
+          tags: ["Definitions"],
+          parameters: [
+            { name: "status", in: "query", schema: { type: "string", enum: ["draft", "published", "archived"] } },
+            { name: "name", in: "query", schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", default: 50 } },
+            { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+          ],
+          responses: { 200: { description: "Paginated list of definitions" } },
+        },
+        post: {
+          summary: "Create a workflow definition",
+          operationId: "createDefinition",
+          tags: ["Definitions"],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, version: { type: "string" }, definition: { type: "object" } }, required: ["name", "version", "definition"] } } } },
+          responses: { 201: { description: "Created" }, 400: { description: "Validation error" } },
+        },
+      },
+      "/api/v1/definitions/{id}": {
+        get: {
+          summary: "Get a workflow definition",
+          operationId: "getDefinition",
+          tags: ["Definitions"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Definition" }, 404: { description: "Not found" } },
+        },
+        put: {
+          summary: "Update a workflow definition",
+          operationId: "updateDefinition",
+          tags: ["Definitions"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
+          responses: { 200: { description: "Updated" }, 404: { description: "Not found" } },
+        },
+      },
+      "/api/v1/definitions/{id}/publish": {
+        post: {
+          summary: "Publish (or archive) a definition",
+          operationId: "publishDefinition",
+          tags: ["Definitions"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Status transitioned" }, 400: { description: "Invalid transition" } },
+        },
+      },
+      "/api/v1/definitions/import": {
+        post: {
+          summary: "Bulk import definitions",
+          operationId: "importDefinitions",
+          tags: ["Definitions"],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "array", items: { type: "object" } } } } },
+          responses: { 201: { description: "Imported" } },
+        },
+      },
+      "/api/v1/runs": {
+        post: {
+          summary: "Start a workflow run",
+          operationId: "createRun",
+          tags: ["Runs"],
+          parameters: [{ name: "Idempotency-Key", in: "header", schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, version: { type: "string" }, inputs: { type: "object" } }, required: ["name", "version"] } } } },
+          responses: { 201: { description: "Run started" }, 200: { description: "Idempotent replay" } },
+        },
+        get: {
+          summary: "List workflow runs",
+          operationId: "listRuns",
+          tags: ["Runs"],
+          parameters: [
+            { name: "status", in: "query", schema: { type: "string" } },
+            { name: "name", in: "query", schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", default: 50 } },
+            { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+          ],
+          responses: { 200: { description: "Paginated list of runs" } },
+        },
+      },
+      "/api/v1/runs/{id}": {
+        get: {
+          summary: "Get a workflow run with all step runs",
+          operationId: "getRun",
+          tags: ["Runs"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Run with steps" }, 404: { description: "Not found" } },
+        },
+      },
+      "/api/v1/runs/search": {
+        post: {
+          summary: "Deep jsonb search across runs",
+          operationId: "searchRuns",
+          tags: ["Runs"],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { filter: { type: "object" } } } } } },
+          responses: { 200: { description: "Matching runs" } },
+        },
+      },
+      "/api/v1/runs/by-ids": {
+        post: {
+          summary: "Get multiple runs by ID",
+          operationId: "getRunsByIds",
+          tags: ["Runs"],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { ids: { type: "array", items: { type: "integer" } } } } } } },
+          responses: { 200: { description: "Runs" } },
+        },
+      },
+      "/api/v1/runs/{id}/cancel": {
+        put: {
+          summary: "Cancel a workflow run",
+          operationId: "cancelRun",
+          tags: ["Runs"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Cancelled" } },
+        },
+      },
+      "/api/v1/runs/{id}/restart/step/{n}": {
+        put: {
+          summary: "Restart a run from a specific step",
+          operationId: "restartFromStep",
+          tags: ["Runs"],
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "n", in: "path", required: true, schema: { type: "integer" } },
+          ],
+          responses: { 200: { description: "Restarted" } },
+        },
+      },
+      "/api/v1/runs/{id}/callback": {
+        put: {
+          summary: "External worker callback",
+          operationId: "callback",
+          tags: ["Runs"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { stepNumber: { type: "integer" }, body: { type: "object" } }, required: ["stepNumber"] } } } },
+          responses: { 200: { description: "Resumed" } },
+        },
+      },
+      "/api/v1/runs/{id}/inputs": {
+        put: {
+          summary: "Update run inputs",
+          operationId: "updateRunInputs",
+          tags: ["Runs"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { inputs: { type: "object" } } } } } },
+          responses: { 200: { description: "Updated" } },
+        },
+      },
+      "/api/v1/steps/next": {
+        get: {
+          summary: "Claim next external task step",
+          operationId: "claimNextStep",
+          tags: ["Steps"],
+          parameters: [{ name: "service", in: "query", required: true, schema: { type: "string" } }],
+          responses: { 200: { description: "Step claimed" }, 204: { description: "No step available" } },
+        },
+      },
+      "/api/v1/steps/search": {
+        post: {
+          summary: "Search step runs",
+          operationId: "searchSteps",
+          tags: ["Steps"],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
+          responses: { 200: { description: "Matching steps" } },
+        },
+      },
+      "/api/v1/steps/{id}/state": {
+        put: {
+          summary: "Update step state",
+          operationId: "updateStepState",
+          tags: ["Steps"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { state: { type: "object" } } } } } },
+          responses: { 200: { description: "Updated" } },
+        },
+      },
+      "/api/v1/steps/{id}/inputs-outputs": {
+        put: {
+          summary: "Update step inputs and outputs",
+          operationId: "updateStepInputsOutputs",
+          tags: ["Steps"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Updated" } },
+        },
+      },
+      "/api/v1/steps/{id}/priority": {
+        put: {
+          summary: "Update step priority",
+          operationId: "updateStepPriority",
+          tags: ["Steps"],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { priority: { type: "integer" } } } } } },
+          responses: { 200: { description: "Updated" } },
+        },
+      },
+      "/api/v1/step-types": {
+        get: {
+          summary: "List registered step types",
+          operationId: "listStepTypes",
+          tags: ["Steps"],
+          responses: { 200: { description: "Step types", content: { "application/json": { schema: { type: "array", items: { type: "object", properties: { type: { type: "string" }, version: { type: "string" }, description: { type: "string" } } } } } } } },
+        },
+      },
+      "/api/v1/steps/dry-run": {
+        post: {
+          summary: "Evaluate capture expressions against sample state",
+          operationId: "dryRunStep",
+          tags: ["Steps"],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { expressions: { type: "array" }, state: { type: "object" }, config: { type: "object" }, body: {} } } } } },
+          responses: { 200: { description: "Evaluation result" } },
+        },
+      },
+    },
+    components: {
+      schemas: {
+        StepType: {
+          type: "object",
+          properties: {
+            type: { type: "string" }, version: { type: "string" }, description: { type: "string" },
+          },
+        },
+      },
+    },
+    "x-step-types": stepTypes,
+  };
+}

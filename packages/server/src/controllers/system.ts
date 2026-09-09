@@ -1,6 +1,8 @@
+import { StepRegistry } from "@wfe/core";
 import { Router } from "express";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { buildOpenApiSpec } from "../openapi/spec";
 
 let versionInfo: { version: string } | undefined;
 
@@ -15,7 +17,7 @@ function getVersion(): { version: string } {
   return versionInfo;
 }
 
-export function systemRoutes(): Router {
+export function systemRoutes(deps?: { registry?: StepRegistry }): Router {
   const router = Router();
 
   router.get("/health", (_req, res) => {
@@ -25,6 +27,14 @@ export function systemRoutes(): Router {
   router.get("/version", (_req, res) => {
     res.json(getVersion());
   });
+
+  if (deps?.registry) {
+    const spec = buildOpenApiSpec(deps.registry);
+
+    router.get("/openapi.json", (_req, res) => {
+      res.json(spec);
+    });
+  }
 
   return router;
 }

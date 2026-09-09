@@ -7,3 +7,4 @@ export * from "./middleware/tenant";
 export * from "./middleware/request-id";
 export * from "./controllers/system";
 export * from "./controllers/definitions";
+export * from "./openapi/spec";

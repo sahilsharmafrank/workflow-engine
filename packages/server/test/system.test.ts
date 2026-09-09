@@ -45,4 +45,19 @@ describe("system endpoints", () => {
     const res = await request(ctx.app).get("/health").set("x-request-id", "abc-123");
     expect(res.headers["x-request-id"]).toBe("abc-123");
   });
+
+  it("GET /api/v1/openapi.json returns a valid OpenAPI 3 document", async () => {
+    const res = await request(ctx.app).get("/api/v1/openapi.json");
+    expect(res.status).toBe(200);
+    expect(res.body.openapi).toMatch(/^3\./);
+    expect(res.body.paths).toBeDefined();
+    expect(res.body.paths["/api/v1/runs"]).toBeDefined();
+    expect(res.body.paths["/api/v1/definitions"]).toBeDefined();
+  });
+
+  it("GET /api/v1/docs serves swagger-ui HTML", async () => {
+    const res = await request(ctx.app).get("/api/v1/docs/").redirects(1);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("swagger");
+  });
 });
