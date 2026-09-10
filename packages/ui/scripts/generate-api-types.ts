@@ -24,7 +24,15 @@ export async function generateApiTypes(outDir: string): Promise<void> {
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, "openapi.json"), `${JSON.stringify(spec, null, 2)}\n`, "utf8");
 
-  const ast = await openapiTS(spec as Parameters<typeof openapiTS>[0]);
+  // buildOpenApiSpec is typed as a plain Record<string, unknown>, while
+  // openapiTS's first parameter is a union of source forms (string | URL |
+  // Readable | OpenAPI3 | Buffer). The two have no structural overlap as far
+  // as the type checker is concerned — even asserting directly to the
+  // narrower OpenAPI3 member of that union fails, since Record<string,
+  // unknown> doesn't statically guarantee OpenAPI3's required `openapi`/
+  // `info` properties — even though the value is a valid OpenAPI document at
+  // runtime. Going through `unknown` is required to bypass that check.
+  const ast = await openapiTS(spec as unknown as Parameters<typeof openapiTS>[0]);
   writeFileSync(join(outDir, "schema.d.ts"), `${HEADER}${astToString(ast)}`, "utf8");
 }
 
