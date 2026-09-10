@@ -441,6 +441,125 @@ export interface components {
             version?: string;
             description?: string;
         };
+        WorkflowParameters: {
+            [key: string]: unknown;
+        };
+        StepProgress: {
+            units?: string | null;
+            totalExpected?: number | null;
+            currentProgress?: number | null;
+        };
+        StepRun: {
+            id: number;
+            stepNumber: number;
+            stepName: string;
+            stepType: string;
+            /** @enum {string} */
+            status: "new" | "starting" | "running" | "waiting" | "complete" | "failed" | "cancelling" | "cancelled" | "paused" | "skipped";
+            message?: string | null;
+            inputs: components["schemas"]["WorkflowParameters"];
+            outputs: components["schemas"]["WorkflowParameters"];
+            state: components["schemas"]["WorkflowParameters"];
+            progress?: components["schemas"]["StepProgress"];
+            externalServiceName?: string | null;
+            /** Format: date-time */
+            lastStepAction?: string | null;
+            /** Format: date-time */
+            createdDate?: string;
+            /** Format: date-time */
+            updatedDate?: string;
+        };
+        WorkflowRun: {
+            id: number;
+            tenantId: string;
+            definitionId?: number | null;
+            parentRunId?: number | null;
+            depth?: number;
+            name: string;
+            version: string;
+            revision?: number;
+            currentStep: number;
+            /** @enum {string} */
+            status: "new" | "starting" | "running" | "waiting" | "complete" | "failed" | "cancelling" | "cancelled" | "paused" | "skipped";
+            inputs: components["schemas"]["WorkflowParameters"];
+            outputs: components["schemas"]["WorkflowParameters"];
+            state: components["schemas"]["WorkflowParameters"];
+            stepRuns?: components["schemas"]["StepRun"][];
+            /** Format: date-time */
+            createdDate?: string;
+            /** Format: date-time */
+            updatedDate?: string;
+        };
+        WorkflowRunList: {
+            rows: components["schemas"]["WorkflowRun"][];
+            total: number;
+        };
+        WorkflowDefinition: {
+            id: number;
+            tenantId: string;
+            name: string;
+            version: string;
+            /** @enum {string} */
+            status: "draft" | "published" | "archived";
+            definition: {
+                [key: string]: unknown;
+            };
+            lastUpdateHistory?: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: date-time */
+            createdDate?: string;
+            /** Format: date-time */
+            updatedDate?: string;
+        };
+        WorkflowDefinitionList: {
+            rows: components["schemas"]["WorkflowDefinition"][];
+            total: number;
+        };
+        BatchJob: {
+            id: number;
+            tenantId: string;
+            name: string;
+            definitionName: string;
+            definitionVersion: string;
+            status: string;
+            totalCount: number;
+            inputs: {
+                [key: string]: unknown;
+            }[];
+            runIds: number[];
+            message?: string | null;
+            /** Format: date-time */
+            createdDate?: string;
+            /** Format: date-time */
+            updatedDate?: string;
+        };
+        BatchJobProgress: {
+            completedCount: number;
+            failedCount: number;
+            runningCount: number;
+        };
+        BatchJobWithProgress: components["schemas"]["BatchJob"] & {
+            progress: components["schemas"]["BatchJobProgress"];
+        };
+        FilterField: {
+            field: string;
+            /** @enum {string} */
+            type: "enum" | "text" | "dateRange";
+            values?: string[];
+        };
+        FilterConfiguration: {
+            definitions: components["schemas"]["FilterField"][];
+            runs: components["schemas"]["FilterField"][];
+            steps: components["schemas"]["FilterField"][];
+        };
+        ErrorEnvelope: {
+            error: {
+                code: string;
+                message: string;
+                details?: unknown;
+            };
+        };
     };
     responses: never;
     parameters: never;
@@ -513,7 +632,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["WorkflowDefinitionList"];
+                };
             };
         };
     };
@@ -566,14 +687,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["WorkflowDefinition"];
+                };
             };
             /** @description Not found */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
         };
     };
@@ -653,7 +778,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        imported: number;
+                    };
+                };
             };
         };
     };
@@ -676,7 +805,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["WorkflowRunList"];
+                };
             };
         };
     };
@@ -731,14 +862,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"];
+                };
             };
             /** @description Not found */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
         };
     };
@@ -762,7 +897,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"][];
+                };
             };
         };
     };
@@ -806,7 +943,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
         };
     };
@@ -827,7 +975,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
         };
     };
@@ -1074,7 +1233,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["BatchJob"][];
+                };
             };
         };
     };
@@ -1128,14 +1289,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["BatchJobWithProgress"];
+                };
             };
             /** @description Not found */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
         };
     };
@@ -1155,14 +1320,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["BatchJob"];
+                };
             };
             /** @description Not found */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
         };
     };
@@ -1180,7 +1349,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["FilterConfiguration"];
+                };
             };
         };
     };

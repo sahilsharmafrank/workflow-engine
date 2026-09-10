@@ -12,19 +12,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { paths } from "../../src/api/schema";
 import { mswServer } from "../msw/server";
 
-// The `as unknown as X` casts in the assertions below are required, not
-// stylistic: the server's OpenAPI document declares `content?: never` for
-// the success responses of GET /runs, GET /runs/{id}, GET /definitions, and
-// GET /filter-configuration (see packages/server/src/openapi/spec.ts), even
-// though all four return substantive JSON bodies at runtime. That
-// under-declaration means openapi-fetch's generated `data` type resolves to
-// `never | undefined` for these calls, so a direct `as X` cast (as this
-// task's brief originally specified) is rejected by TypeScript as an
-// "insufficient overlap" conversion. GET /step-types is the one endpoint
-// here whose spec does declare a response schema, and its cast needs no
-// `unknown` step. Once a separate task declares proper response schemas for
-// the other four routes, these casts should be revisited and can likely
-// collapse back to plain `as X`.
 describe("generated client against a real server", () => {
   let container: StartedPostgreSqlContainer;
   let db: DbContext;
@@ -122,15 +109,14 @@ describe("generated client against a real server", () => {
   it("GET /step-types returns the built-in registry", async () => {
     const { data, response } = await client.GET("/api/v1/step-types", {});
     expect(response.status).toBe(200);
-    const types = (data as Array<{ type: string }>).map((t) => t.type);
+    const types = data!.map((t) => t.type);
     expect(types).toContain("core.noop");
     expect(types).toContain("core.http");
   });
 
   it("GET /filter-configuration returns registry-backed stepType values", async () => {
     const { data } = await client.GET("/api/v1/filter-configuration", {});
-    const cfg = data as unknown as { steps: Array<{ field: string; values?: string[] }> };
-    const stepType = cfg.steps.find((f) => f.field === "stepType");
+    const stepType = data!.steps.find((f) => f.field === "stepType");
     // Sourced from the live registry, so this fails if the endpoint ever
     // reverts to a hardcoded list that omits a real step type.
     expect(stepType?.values).toContain("core.transform");
@@ -138,27 +124,24 @@ describe("generated client against a real server", () => {
 
   it("GET /runs lists the run that was started", async () => {
     const { data } = await client.GET("/api/v1/runs", {});
-    const result = data as unknown as { rows: Array<{ id: number; name: string }>; total: number };
-    expect(result.total).toBeGreaterThanOrEqual(1);
-    expect(result.rows.some((r) => r.id === runId)).toBe(true);
+    expect(data!.total).toBeGreaterThanOrEqual(1);
+    expect(data!.rows.some((r) => r.id === runId)).toBe(true);
   });
 
   it("GET /runs/{id} returns the run with its steps", async () => {
     const { data } = await client.GET("/api/v1/runs/{id}", { params: { path: { id: runId } } });
-    const run = data as unknown as { id: number; status: string; stepRuns: Array<{ stepName: string }> };
-    expect(run.id).toBe(runId);
-    expect(run.stepRuns.map((s) => s.stepName)).toEqual(["Only"]);
+    expect(data!.id).toBe(runId);
+    expect(data!.stepRuns!.map((s) => s.stepName)).toEqual(["Only"]);
   });
 
   it("GET /definitions lists the published definition", async () => {
     const { data } = await client.GET("/api/v1/definitions", {});
-    const result = data as unknown as { rows: Array<{ name: string; version: string }> };
-    expect(result.rows.some((d) => d.name === "contract-target" && d.version === "1.0.0")).toBe(true);
+    expect(data!.rows.some((d) => d.name === "contract-target" && d.version === "1.0.0")).toBe(true);
   });
 
   it("surfaces a server error envelope with its code", async () => {
     const { error, response } = await client.GET("/api/v1/runs/{id}", { params: { path: { id: 999999 } } });
     expect(response.status).toBe(404);
-    expect((error as unknown as { error: { code: string } }).error.code).toBe("RUN_NOT_FOUND");
+    expect(error!.error.code).toBe("RUN_NOT_FOUND");
   });
 });

@@ -19,14 +19,7 @@ export function useFilterConfiguration() {
     // Filter descriptors change only when the registry does, which needs a
     // server restart — so this is worth caching for the session.
     staleTime: Infinity,
-    // The generated schema documents this endpoint with no response body
-    // (`content?: never` in schema.d.ts) even though the server actually
-    // returns a JSON object — a gap in the server's OpenAPI annotations,
-    // out of scope for this task. `unwrap`'s inferred T is therefore
-    // `undefined`, which doesn't overlap with FilterConfiguration enough
-    // for a direct cast; going through `unknown` is what TS itself
-    // suggests for a deliberate cast like this one.
     queryFn: async (): Promise<FilterConfiguration> =>
-      unwrap(await api.GET("/api/v1/filter-configuration", {})) as unknown as FilterConfiguration,
+      unwrap(await api.GET("/api/v1/filter-configuration", {})),
   });
 }
