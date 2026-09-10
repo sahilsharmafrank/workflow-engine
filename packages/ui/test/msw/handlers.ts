@@ -58,7 +58,32 @@ const baseHandlers = [
 // to parse ("Missing parameter name") rather than matching a wildcard port.
 const loopbackPassthrough = http.all(/^http:\/\/127\.0\.0\.1:\d+/, () => passthrough());
 
-export const handlers = [loopbackPassthrough, ...baseHandlers];
+export const runFixtures = [
+  { id: 1, name: "nightly", version: "1.0.0", status: "complete", currentStep: 2, updatedDate: "2026-09-10T08:00:00.000Z" },
+  { id: 2, name: "nightly", version: "1.0.0", status: "failed", currentStep: 1, updatedDate: "2026-09-10T09:00:00.000Z" },
+  { id: 3, name: "adhoc", version: "2.0.0", status: "running", currentStep: 0, updatedDate: "2026-09-10T10:00:00.000Z" },
+];
+
+// Mirrors the server's own filtering so a test that filters proves the screen
+// sends the parameters, not merely that it renders a list.
+const runHandlers = [
+  http.get(`${BASE}/runs`, ({ request }) => {
+    const url = new URL(request.url);
+    const status = url.searchParams.get("status");
+    const name = url.searchParams.get("name");
+    let rows = runFixtures;
+    if (status) rows = rows.filter((r) => r.status === status);
+    if (name) rows = rows.filter((r) => r.name === name);
+    return HttpResponse.json({ rows, total: rows.length });
+  }),
+  http.post(`${BASE}/runs/search`, async ({ request }) => {
+    const body = (await request.json()) as Record<string, unknown>;
+    const wanted = body["inputs.jobId"];
+    return HttpResponse.json(wanted === "job-42" ? [runFixtures[0]] : []);
+  }),
+];
+
+export const handlers = [loopbackPassthrough, ...baseHandlers, ...runHandlers];
 
 /** Helper for tests that need a specific failure. */
 export function errorResponse(status: number, code: string, message: string) {

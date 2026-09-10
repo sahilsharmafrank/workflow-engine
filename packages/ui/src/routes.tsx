@@ -1,6 +1,6 @@
-import { Typography } from "@mui/material";
 import { Navigate, RouteObject } from "react-router-dom";
 import { AppShell } from "./AppShell";
+import { RunTracker } from "./screens/RunTracker";
 import { StepCatalog } from "./screens/StepCatalog";
 
 export const routes: RouteObject[] = [
@@ -9,8 +9,7 @@ export const routes: RouteObject[] = [
     element: <AppShell />,
     children: [
       { index: true, element: <Navigate to="/runs" replace /> },
-      // Placeholder — Task 7 replaces this element with <RunTracker />.
-      { path: "runs", element: <Typography variant="h5">Runs</Typography> },
+      { path: "runs", element: <RunTracker /> },
       { path: "step-types", element: <StepCatalog /> },
     ],
   },
