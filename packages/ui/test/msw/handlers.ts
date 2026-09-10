@@ -87,7 +87,51 @@ const runHandlers = [
   }),
 ];
 
-export const handlers = [loopbackPassthrough, ...baseHandlers, ...runHandlers];
+export const runDetailFixture = {
+  id: 2,
+  name: "nightly",
+  version: "1.0.0",
+  status: "failed",
+  currentStep: 1,
+  updatedDate: "2026-09-10T09:00:00.000Z",
+  parentRunId: null,
+  depth: 0,
+  inputs: { jobId: "job-42" },
+  outputs: {},
+  state: {},
+  stepRuns: [
+    { id: 10, stepNumber: 0, stepName: "Prepare", stepType: "core.transform", status: "complete", message: null, inputs: { a: 1 }, outputs: { b: 2 }, state: {} },
+    { id: 11, stepNumber: 1, stepName: "Call", stepType: "core.http", status: "failed", message: "connect ECONNREFUSED", inputs: {}, outputs: {}, state: {} },
+  ],
+};
+
+// Held outside the fixture object itself so GET can reflect a restart's
+// effect and a test can observe a genuine state change rather than a
+// refetch racing a static fixture back to "failed" (see task-8-report.md,
+// ruling P4). resetRunDetailStatus() is called from the shared afterEach so
+// a restart in one test can't leak "running" into the next.
+let runDetailStatus: string = runDetailFixture.status;
+
+export function resetRunDetailStatus() {
+  runDetailStatus = runDetailFixture.status;
+}
+
+const runDetailHandlers = [
+  http.get(`${BASE}/runs/:id`, ({ params }) =>
+    params.id === "2"
+      ? HttpResponse.json({ ...runDetailFixture, status: runDetailStatus })
+      : errorResponse(404, "RUN_NOT_FOUND", `Run ${params.id} not found`)
+  ),
+  http.put(`${BASE}/runs/:id/cancel`, () =>
+    errorResponse(409, "RUN_NOT_CANCELLABLE", "Run 2 is already failed and cannot be cancelled")
+  ),
+  http.put(`${BASE}/runs/:id/restart/step/:n`, () => {
+    runDetailStatus = "running";
+    return HttpResponse.json({ ...runDetailFixture, status: runDetailStatus });
+  }),
+];
+
+export const handlers = [loopbackPassthrough, ...baseHandlers, ...runHandlers, ...runDetailHandlers];
 
 /** Helper for tests that need a specific failure. */
 export function errorResponse(status: number, code: string, message: string) {

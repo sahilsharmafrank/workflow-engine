@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { afterAll, afterEach } from "vitest";
 import { bridgeSignal } from "./jsdomNativeAbort";
+import { resetRunDetailStatus } from "./msw/handlers";
 import { mswServer } from "./msw/server";
 
 /**
@@ -118,5 +119,8 @@ globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
 // network instead of hitting a handler (confirmed empirically — see
 // .superpowers/sdd/2026-09-10-phase5-ui/task-3-report.md).
 mswServer.listen({ onUnhandledRequest: "error" });
-afterEach(() => mswServer.resetHandlers());
+afterEach(() => {
+  mswServer.resetHandlers();
+  resetRunDetailStatus();
+});
 afterAll(() => mswServer.close());
