@@ -23,6 +23,7 @@ function isBlockedIPv4(ip: string): boolean {
     return false; // not a well-formed dotted-quad; nothing here to block
   }
   const [a, b] = octets;
+  if (a === 0) return true; // 0.0.0.0/8 — "this network"; on Linux, connecting to 0.0.0.0 reaches localhost
   if (a === 127) return true; // 127.0.0.0/8 — loopback
   if (a === 10) return true; // 10.0.0.0/8 — private
   if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 — private
@@ -31,21 +32,105 @@ function isBlockedIPv4(ip: string): boolean {
   return false;
 }
 
+/**
+ * Parses a syntactically valid IPv6 literal (as accepted by `isIP`) into its
+ * 16 bytes, expanding "::" compression and an embedded IPv4 dotted-quad tail
+ * (the "::ffff:a.b.c.d" and deprecated "::a.b.c.d" forms). This is the only
+ * place in the module that looks at IPv6 as text — every blocking decision
+ * below is made over the returned bytes, not the string, so a new textual
+ * form the URL/DNS layer might hand back (compressed, expanded, mixed) can't
+ * slip past the guard the way the old text regex did.
+ *
+ * Returns null if the text can't be parsed as a well-formed IPv6 literal.
+ * Callers MUST treat a null result as blocked, not allowed.
+ */
+function parseIPv6Bytes(address: string): Uint8Array | null {
+  let text = address;
+
+  // Rewrite a trailing IPv4 dotted-quad ("...:a.b.c.d") into two hex groups
+  // so the rest of the parser only ever deals with colon-separated hex.
+  const dotIndex = text.indexOf(".");
+  if (dotIndex !== -1) {
+    const lastColon = text.lastIndexOf(":");
+    if (lastColon === -1 || lastColon > dotIndex) return null;
+    const octets = text.slice(lastColon + 1).split(".");
+    if (octets.length !== 4) return null;
+    const nums: number[] = [];
+    for (const o of octets) {
+      if (!/^\d{1,3}$/.test(o)) return null;
+      const n = Number(o);
+      if (n < 0 || n > 255) return null;
+      nums.push(n);
+    }
+    const hi = ((nums[0] << 8) | nums[1]).toString(16);
+    const lo = ((nums[2] << 8) | nums[3]).toString(16);
+    text = `${text.slice(0, lastColon + 1)}${hi}:${lo}`;
+  }
+
+  const parseGroups = (s: string): number[] | null => {
+    if (s === "") return [];
+    const groups = s.split(":");
+    const out: number[] = [];
+    for (const g of groups) {
+      if (!/^[0-9a-f]{1,4}$/i.test(g)) return null;
+      out.push(parseInt(g, 16));
+    }
+    return out;
+  };
+
+  const halves = text.split("::");
+  let groups: number[] | null;
+  if (halves.length === 2) {
+    const head = parseGroups(halves[0]);
+    const tail = parseGroups(halves[1]);
+    if (head === null || tail === null) return null;
+    const missing = 8 - head.length - tail.length;
+    if (missing < 0) return null;
+    groups = [...head, ...new Array(missing).fill(0), ...tail];
+  } else if (halves.length === 1) {
+    groups = parseGroups(halves[0]);
+    if (groups !== null && groups.length !== 8) return null;
+  } else {
+    return null; // more than one "::" — not a valid IPv6 literal
+  }
+  if (groups === null || groups.length !== 8) return null;
+
+  const bytes = new Uint8Array(16);
+  for (let i = 0; i < 8; i++) {
+    bytes[i * 2] = (groups[i] >> 8) & 0xff;
+    bytes[i * 2 + 1] = groups[i] & 0xff;
+  }
+  return bytes;
+}
+
 function isBlockedIPv6(ip: string): boolean {
-  const lower = ip.toLowerCase();
-  if (lower === "::1") return true; // loopback
+  const bytes = parseIPv6Bytes(ip.toLowerCase());
+  if (!bytes) return true; // couldn't determine what this is — block, not allow
 
-  // IPv4-mapped IPv6 (::ffff:a.b.c.d): check the embedded IPv4 address —
-  // otherwise it's a one-line bypass of every IPv4 check above.
-  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isBlockedIPv4(mapped[1]);
+  if (bytes.every((b) => b === 0)) return true; // :: — unspecified address
+  if (bytes.slice(0, 15).every((b) => b === 0) && bytes[15] === 1) return true; // ::1 — loopback
 
-  if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true; // fc00::/7 — unique-local
+  const first10Zero = bytes.slice(0, 10).every((b) => b === 0);
+  if (first10Zero && bytes[10] === 0xff && bytes[11] === 0xff) {
+    // IPv4-mapped IPv6, ::ffff:0:0/96 — decide from the embedded IPv4
+    // address rather than re-deriving the IPv4 ranges here.
+    return isBlockedIPv4(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
+  }
+
+  if (bytes.slice(0, 12).every((b) => b === 0)) {
+    // IPv4-compatible IPv6 (deprecated), ::/96 — same treatment. :: and
+    // ::1 are special cases of this same prefix and are already handled
+    // above, so anything reaching here has a genuine embedded address.
+    return isBlockedIPv4(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
+  }
+
+  if ((bytes[0] & 0xfe) === 0xfc) return true; // fc00::/7 — unique-local
   // Not named in the literal list of ranges this fix was scoped to, but the
   // same "link-local" rationale that covers 169.254.0.0/16 for IPv4 applies
   // here: fe80::/10 is IPv6's link-local range and reaches the same class of
   // on-link metadata services.
-  if (/^fe[89ab][0-9a-f]:/.test(lower)) return true; // fe80::/10 — link-local
+  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10 — link-local
+
   return false;
 }
 

@@ -149,3 +149,113 @@ describe("HttpStep SSRF protection", () => {
     }
   });
 });
+
+// Regression coverage for the IPv4-mapped/IPv4-compatible IPv6 bypass fixed
+// after `13d5476`: `new URL(...)` canonicalises a bracketed IPv6 literal to
+// hex *before* the guard ever sees it (e.g. the hostname of
+// "http://[::ffff:169.254.169.254]/" is "[::ffff:a9fe:a9fe]"), so the old
+// text regex over the dotted form never matched. Every case below is
+// exercised as a real request through `HttpStep.run`, using the exact string
+// an attacker would put in a URL — not by calling the internal helper with a
+// hand-typed address — so the assertion is only satisfied if the guard
+// actually intercepts the request Node itself would issue.
+describe("HttpStep SSRF protection — IPv4-mapped/compatible IPv6 bypass", () => {
+  const httpStep = new HttpStep({ name: "H", version: "1.0.0", type: "core.http" });
+
+  afterEach(() => {
+    delete process.env.WFE_HTTP_ALLOW_PRIVATE_HOSTS;
+    jest.restoreAllMocks();
+  });
+
+  const attacks: Array<[string, string]> = [
+    ["http://[::ffff:127.0.0.1]/", "IPv4-mapped loopback (compressed)"],
+    ["http://[::ffff:169.254.169.254]/", "IPv4-mapped cloud metadata address (compressed)"],
+    ["http://[0:0:0:0:0:ffff:7f00:1]/", "IPv4-mapped loopback (fully expanded form)"],
+    ["http://[::127.0.0.1]/", "IPv4-compatible loopback (deprecated ::a.b.c.d form)"],
+    ["http://[::1]/", "IPv6 loopback"],
+    ["http://[::]/", "IPv6 unspecified address"],
+    ["http://0.0.0.0/", "0.0.0.0"],
+  ];
+
+  it.each(attacks)("refuses %s (%s)", async (url) => {
+    // If the guard fails to intercept this, fetch would actually be called
+    // (and, on the buggy code, the mock makes it "succeed" instead of
+    // erroring for an unrelated reason like ECONNREFUSED) — so this fails
+    // loudly and fast on the bug rather than timing out against a real
+    // socket.
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue(new Response("ok", { status: 200 }));
+    try {
+      const ctx = makeCtx({ url });
+      await expect(httpStep.run(ctx as any)).rejects.toMatchObject({
+        statusCode: 400, code: "HTTP_STEP_BLOCKED_HOST",
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("refuses a redirect whose target is an IPv4-mapped IPv6 metadata address", async () => {
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: "http://[::ffff:169.254.169.254]/latest/meta-data/" },
+      })
+    );
+    try {
+      const ctx = makeCtx({ url: "http://8.8.8.8/redirect-to-mapped-metadata" });
+      await expect(httpStep.run(ctx as any)).rejects.toMatchObject({
+        statusCode: 400, code: "HTTP_STEP_BLOCKED_HOST",
+      });
+      // Only the initial hop should ever reach fetch; the mapped redirect
+      // target must be intercepted before a second call is made.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("still allows a legitimate public IPv4 address", async () => {
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } })
+    );
+    try {
+      const ctx = makeCtx({ url: "http://8.8.8.8/" });
+      const result = await httpStep.run(ctx as any);
+      expect(result.stepState.status).toBe(WorkflowStatus.COMPLETE);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("still allows a legitimate public IPv6 address", async () => {
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } })
+    );
+    try {
+      const ctx = makeCtx({ url: "http://[2001:4860:4860::8888]/" });
+      const result = await httpStep.run(ctx as any);
+      expect(result.stepState.status).toBe(WorkflowStatus.COMPLETE);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("WFE_HTTP_ALLOW_PRIVATE_HOSTS=true still relaxes the mapped-IPv6 and 0.0.0.0 checks", async () => {
+    process.env.WFE_HTTP_ALLOW_PRIVATE_HOSTS = "true";
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } })
+    );
+    try {
+      for (const [url] of attacks) {
+        const ctx = makeCtx({ url });
+        const result = await httpStep.run(ctx as any);
+        expect(result.stepState.status).toBe(WorkflowStatus.COMPLETE);
+      }
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
