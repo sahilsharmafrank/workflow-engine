@@ -43,7 +43,18 @@ export interface EngineConfig {
    * Defaults to 10.
    */
   maxSubWorkflowDepth?: number;
+  /**
+   * Largest number of `inputs` a single `POST /batch-jobs` request may fan
+   * out into runs — each started synchronously, in series, before the
+   * request responds. Without a cap, a single request is an availability
+   * lever against the API: auth is deliberately `none` in v1, so any caller
+   * could submit an arbitrarily large `inputs` array. Defaults to 1000.
+   */
+  maxBatchInputs?: number;
 }
+
+/** Default for `maxBatchInputs` when `WFE_BATCH_MAX_INPUTS` is unset. */
+export const DEFAULT_MAX_BATCH_INPUTS = 1000;
 
 /**
  * Whether `core.http` may target private/loopback/link-local/unique-local
@@ -96,6 +107,17 @@ export function loadEngineConfig(env: NodeJS.ProcessEnv = process.env): EngineCo
     maxSubWorkflowDepth = parsed;
   }
 
+  let maxBatchInputs = DEFAULT_MAX_BATCH_INPUTS;
+  if (env.WFE_BATCH_MAX_INPUTS !== undefined) {
+    const parsed = Number(env.WFE_BATCH_MAX_INPUTS);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw new Error(
+        `WFE_BATCH_MAX_INPUTS must be a positive integer; got "${env.WFE_BATCH_MAX_INPUTS}"`
+      );
+    }
+    maxBatchInputs = parsed;
+  }
+
   return {
     dbUrl,
     showSql: env.WFE_SHOW_SQL === "true",
@@ -104,5 +126,6 @@ export function loadEngineConfig(env: NodeJS.ProcessEnv = process.env): EngineCo
     lockTimeoutMs,
     httpAllowPrivateHosts: isHttpAllowPrivateHosts(env),
     maxSubWorkflowDepth,
+    maxBatchInputs,
   };
 }

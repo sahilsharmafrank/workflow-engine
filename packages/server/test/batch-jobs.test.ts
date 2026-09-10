@@ -20,9 +20,14 @@ describe("Batch jobs", () => {
   let evaluator: ExpressionEvaluator;
   let queue: MemoryQueueDriver;
 
+  // Kept low (rather than the real default of 1000) so the "over the limit"
+  // test doesn't have to start 1001 real runs against a real Postgres
+  // container to exercise the cap.
+  const maxBatchInputs = 3;
+
   beforeAll(async () => {
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    const config = { dbUrl: container.getConnectionUri() };
+    const config = { dbUrl: container.getConnectionUri(), maxBatchInputs };
     db = new DbContext(config);
     await db.runMigrations();
 
@@ -35,7 +40,7 @@ describe("Batch jobs", () => {
       config, db, registry, evaluator, queue,
     });
     app = createApp({
-      executor, db, registry, authProvider: new NoneAuthProvider(), evaluator, queue,
+      executor, db, registry, authProvider: new NoneAuthProvider(), evaluator, queue, config,
     });
 
     // Publish a definition for batch fan-out
@@ -72,6 +77,8 @@ describe("Batch jobs", () => {
   });
 
   it("POST /api/v1/batch-jobs creates a batch and fans out runs", async () => {
+    // Exactly at the configured maxBatchInputs (3) — proves the cap is
+    // inclusive, not off-by-one.
     const res = await request(app)
       .post("/api/v1/batch-jobs")
       .send({
@@ -84,6 +91,29 @@ describe("Batch jobs", () => {
     expect(res.body.totalCount).toBe(3);
     expect(res.body.runIds).toHaveLength(3);
     expect(res.body.status).toBe("running");
+  });
+
+  it("POST /api/v1/batch-jobs rejects a batch over the configured input limit", async () => {
+    // One more than maxBatchInputs (3). Without the cap this would fan out
+    // 4 real runs against Postgres — an uncapped array is exactly the
+    // availability lever this limit exists to close.
+    const res = await request(app)
+      .post("/api/v1/batch-jobs")
+      .send({
+        name: "too-big-batch",
+        definitionName: "batch-target",
+        definitionVersion: "1.0.0",
+        inputs: [{ x: 1 }, { x: 2 }, { x: 3 }, { x: 4 }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("BATCH_JOB_TOO_MANY_INPUTS");
+    // The error must name both figures, not just refuse silently.
+    expect(res.body.error.message).toEqual(expect.stringContaining("4"));
+    expect(res.body.error.message).toEqual(expect.stringContaining("3"));
+
+    // No batch job record and no runs should have been created at all.
+    const list = await request(app).get("/api/v1/batch-jobs");
+    expect(list.body.find((j: { name: string }) => j.name === "too-big-batch")).toBeUndefined();
   });
 
   it("GET /api/v1/batch-jobs lists batch jobs", async () => {

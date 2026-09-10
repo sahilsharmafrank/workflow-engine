@@ -84,4 +84,39 @@ describe("loadEngineConfig", () => {
       /WFE_MAX_SUBWORKFLOW_DEPTH/
     );
   });
+
+  // POST /batch-jobs fans one run out per element of `inputs`, synchronously,
+  // with no cap of its own — an uncapped array is an availability lever
+  // against the API, and auth is deliberately `none` in v1.
+  it("defaults maxBatchInputs to 1000", () => {
+    expect(loadEngineConfig(baseEnv).maxBatchInputs).toBe(1000);
+  });
+
+  it("accepts a maxBatchInputs override", () => {
+    expect(loadEngineConfig({ ...baseEnv, WFE_BATCH_MAX_INPUTS: "5" }).maxBatchInputs).toBe(5);
+  });
+
+  it("rejects a zero maxBatchInputs at boot time", () => {
+    expect(() => loadEngineConfig({ ...baseEnv, WFE_BATCH_MAX_INPUTS: "0" })).toThrow(
+      /WFE_BATCH_MAX_INPUTS/
+    );
+  });
+
+  it("rejects a negative maxBatchInputs at boot time", () => {
+    expect(() => loadEngineConfig({ ...baseEnv, WFE_BATCH_MAX_INPUTS: "-1" })).toThrow(
+      /WFE_BATCH_MAX_INPUTS/
+    );
+  });
+
+  it("rejects a non-integer maxBatchInputs at boot time", () => {
+    expect(() => loadEngineConfig({ ...baseEnv, WFE_BATCH_MAX_INPUTS: "1.5" })).toThrow(
+      /WFE_BATCH_MAX_INPUTS/
+    );
+  });
+
+  it("rejects a non-numeric maxBatchInputs at boot time", () => {
+    expect(() => loadEngineConfig({ ...baseEnv, WFE_BATCH_MAX_INPUTS: "many" })).toThrow(
+      /WFE_BATCH_MAX_INPUTS/
+    );
+  });
 });

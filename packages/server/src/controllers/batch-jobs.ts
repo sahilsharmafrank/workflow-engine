@@ -1,12 +1,13 @@
 import { Router } from "express";
 import {
-  RunExecutor, DbContext, BatchJobRepository,
+  RunExecutor, DbContext, BatchJobRepository, EngineConfig, WfeError, DEFAULT_MAX_BATCH_INPUTS,
 } from "@wfe/core";
 import { AuthenticatedRequest } from "../auth/types";
 
-export function batchJobRoutes(deps: { executor: RunExecutor; db: DbContext }): Router {
+export function batchJobRoutes(deps: { executor: RunExecutor; db: DbContext; config?: EngineConfig }): Router {
   const router = Router();
   const batchJobs = new BatchJobRepository(deps.db);
+  const maxBatchInputs = deps.config?.maxBatchInputs ?? DEFAULT_MAX_BATCH_INPUTS;
 
   router.post("/batch-jobs", async (req, res, next) => {
     try {
@@ -16,6 +17,17 @@ export function batchJobRoutes(deps: { executor: RunExecutor; db: DbContext }): 
       if (!Array.isArray(inputs) || inputs.length === 0) {
         res.status(400).json({ error: { code: "BATCH_INVALID_INPUTS", message: "inputs must be a non-empty array" } });
         return;
+      }
+
+      // Unbounded fan-out is an availability lever against the API: auth is
+      // deliberately `none` in v1, so anyone who can reach this route could
+      // otherwise submit an arbitrarily large `inputs` array and have the
+      // engine start a run per element, synchronously, in series.
+      if (inputs.length > maxBatchInputs) {
+        throw new WfeError(
+          `Batch job submitted ${inputs.length} inputs, exceeding the limit of ${maxBatchInputs}`,
+          { statusCode: 400, code: "BATCH_JOB_TOO_MANY_INPUTS" }
+        );
       }
 
       const job = await batchJobs.create({

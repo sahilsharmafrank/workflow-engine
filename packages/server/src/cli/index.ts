@@ -96,7 +96,9 @@ program
 
     const executor = new RunExecutor({ config, db, registry, evaluator, queue });
     const authProvider = new NoneAuthProvider();
-    const app = createApp({ executor, db, registry, authProvider, queue, evaluator });
+    const app = createApp({
+      executor, db, registry, authProvider, queue, evaluator, config,
+    });
 
     app.listen(config.port, () => {
       log.info("Server started", { port: config.port, queue: config.queueDriver });

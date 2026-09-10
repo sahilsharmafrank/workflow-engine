@@ -1,6 +1,6 @@
 import express, { Express } from "express";
 import swaggerUi from "swagger-ui-express";
-import { RunExecutor, StepRegistry, DbContext, QueueDriver, ExpressionEvaluator } from "@wfe/core";
+import { RunExecutor, StepRegistry, DbContext, QueueDriver, ExpressionEvaluator, EngineConfig } from "@wfe/core";
 import { AuthProvider } from "./auth/types";
 import { errorHandler } from "./middleware/error-handler";
 import { tenantMiddleware } from "./middleware/tenant";
@@ -19,6 +19,8 @@ export interface AppDeps {
   authProvider: AuthProvider;
   evaluator: ExpressionEvaluator;
   queue?: QueueDriver;
+  /** Passed through to routes that read engine-level config, e.g. batch-jobs' `maxBatchInputs`. */
+  config?: EngineConfig;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -40,7 +42,7 @@ export function createApp(deps: AppDeps): Express {
   app.use("/api/v1", definitionRoutes({ db: deps.db, registry: deps.registry }));
   app.use("/api/v1", runRoutes({ executor: deps.executor, db: deps.db }));
   app.use("/api/v1", stepRoutes({ db: deps.db, registry: deps.registry, evaluator: deps.evaluator }));
-  app.use("/api/v1", batchJobRoutes({ executor: deps.executor, db: deps.db }));
+  app.use("/api/v1", batchJobRoutes({ executor: deps.executor, db: deps.db, config: deps.config }));
 
   app.use(errorHandler());
 
