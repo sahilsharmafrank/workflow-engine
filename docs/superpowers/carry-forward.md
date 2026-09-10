@@ -64,8 +64,13 @@ happy path; each is worth closing when its file is next touched.
 - **The sample plugin package declares no `@wfe/sdk` dependency.** It resolves
   through the workspace today; a real third-party plugin would need the
   dependency declared, so the sample sets a poor example.
-- **`EmitEventStep` does not validate an empty queue input.** An empty string
-  publishes to a queue named `""` rather than failing.
+- ~~**`EmitEventStep` does not validate an empty queue input.**~~ (resolved)
+  An empty, whitespace-only, or non-string queue name is now a `WfeError`
+  (`EMIT_EVENT_INVALID_QUEUE`, 400) rather than a publish to a queue named
+  `""`. Fixed alongside `EMIT_EVENT_RESERVED_QUEUE` (see final-review-A.md
+  Fix 1), which refuses `core.emitEvent` publishes to `DELAY_QUEUE`/
+  `RESPONSE_QUEUE` — without it a workflow could forge engine control
+  messages onto its own resume/callback queues.
 - **`ConditionStep` silently skips on an unknown action value.** A typo in
   `action` behaves like a deliberate skip instead of erroring.
 - **Definition snapshotting is a shallow assignment.** A deep clone would be
