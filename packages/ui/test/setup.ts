@@ -1,5 +1,7 @@
 import "@testing-library/jest-dom/vitest";
+import { afterAll, afterEach, beforeAll } from "vitest";
 import { bridgeSignal } from "./jsdomNativeAbort";
+import { mswServer } from "./msw/server";
 
 /**
  * Vitest's jsdom environment shadows the global AbortController/AbortSignal
@@ -55,12 +57,53 @@ import { bridgeSignal } from "./jsdomNativeAbort";
 const NativeRequest = globalThis.Request;
 const NativeFetch = globalThis.fetch;
 
+/**
+ * Task 3 addition, found wiring up the first real HTTP calls in this
+ * package: `src/api/client.ts` deliberately uses an empty `openapi-fetch`
+ * base URL and calls relative paths like "/api/v1/step-types" — correct in
+ * a real browser, where `fetch("/x")` resolves against `window.location`
+ * for free. `NativeRequest`/`NativeFetch` above are undici's, though, and
+ * undici's `Request`/`fetch` have no notion of a "current document" to
+ * resolve a relative URL against — they require an absolute URL
+ * unconditionally and throw `TypeError: Failed to parse URL from /x`
+ * otherwise (confirmed empirically, both via `new Request("/x")` directly
+ * and via a `useStepTypes()` call under MSW: the request never reaches
+ * MSW's interceptor at all — it fails building the `Request` before any
+ * handler gets a look). jsdom doesn't paper over this because jsdom
+ * doesn't implement fetch/Request itself (see the comment above); the
+ * resolution browsers do implicitly simply doesn't happen anywhere in
+ * this stack unless something does it explicitly. So it happens here.
+ *
+ * Resolved against a fixed "http://localhost" origin, not the live
+ * `location.href`: Vitest's jsdom environment defaults its document URL to
+ * "http://localhost:3000/" (confirmed empirically — that is *Vitest's*
+ * default, not jsdom's own), which would silently mismatch the
+ * "http://localhost" origin (no port) that test/msw/handlers.ts's `BASE`
+ * and every handler URL in this suite already standardize on.
+ */
+function resolveRelativeUrl(input: RequestInfo | URL): RequestInfo | URL {
+  if (typeof input === "string" && input.startsWith("/")) {
+    return new URL(input, "http://localhost").href;
+  }
+  return input;
+}
+
 class TestRequest extends NativeRequest {
   constructor(input: RequestInfo | URL, init?: RequestInit) {
-    super(input, init ? { ...init, signal: bridgeSignal(init.signal) } : init);
+    super(resolveRelativeUrl(input), init ? { ...init, signal: bridgeSignal(init.signal) } : init);
   }
 }
 globalThis.Request = TestRequest as unknown as typeof Request;
 
 globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-  NativeFetch(input, init ? { ...init, signal: bridgeSignal(init.signal) } : init)) as typeof fetch;
+  NativeFetch(
+    resolveRelativeUrl(input),
+    init ? { ...init, signal: bridgeSignal(init.signal) } : init
+  )) as typeof fetch;
+
+// "error" rather than "warn": an unhandled request means a screen called an
+// endpoint no handler describes, which is exactly the drift this layer exists
+// to catch. Letting it through silently would defeat the point.
+beforeAll(() => mswServer.listen({ onUnhandledRequest: "error" }));
+afterEach(() => mswServer.resetHandlers());
+afterAll(() => mswServer.close());
