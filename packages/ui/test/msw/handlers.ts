@@ -77,8 +77,12 @@ const runHandlers = [
     return HttpResponse.json({ rows, total: rows.length });
   }),
   http.post(`${BASE}/runs/search`, async ({ request }) => {
-    const body = (await request.json()) as Record<string, unknown>;
-    const wanted = body["inputs.jobId"];
+    // Mirrors the controller, which reads `req.body.filter` (not the body
+    // itself) — packages/server/src/controllers/runs.ts. A handler that read
+    // the top level, like the request itself, would agree with a client bug
+    // that silently drops the filter in production.
+    const body = (await request.json()) as { filter?: Record<string, unknown> };
+    const wanted = body.filter?.["inputs.jobId"];
     return HttpResponse.json(wanted === "job-42" ? [runFixtures[0]] : []);
   }),
 ];

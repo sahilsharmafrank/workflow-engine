@@ -20,6 +20,7 @@ describe("generated client against a real server", () => {
   let server: Server;
   let client: ReturnType<typeof createClient<paths>>;
   let runId: number;
+  let searchTargetRunId: number;
 
   beforeAll(async () => {
     // MSW would intercept these requests; this suite exists precisely to avoid
@@ -69,6 +70,13 @@ describe("generated client against a real server", () => {
       tenantId: "default", name: "contract-target", version: "1.0.0", inputs: {},
     });
     await executor.start("default", runId);
+
+    // A second run with a distinguishable jsonb input, seeded specifically so
+    // POST /runs/search has something to find one of and exclude the rest of.
+    searchTargetRunId = await executor.startWorkflow({
+      tenantId: "default", name: "contract-target", version: "1.0.0", inputs: { jobId: "contract-job-42" },
+    });
+    await executor.start("default", searchTargetRunId);
   }, 180000);
 
   afterAll(async () => {
@@ -143,5 +151,24 @@ describe("generated client against a real server", () => {
     const { error, response } = await client.GET("/api/v1/runs/{id}", { params: { path: { id: 999999 } } });
     expect(response.status).toBe(404);
     expect(error!.error.code).toBe("RUN_NOT_FOUND");
+  });
+
+  it("POST /runs/search finds the run matching a jsonb input filter", async () => {
+    const { data } = await client.POST("/api/v1/runs/search", {
+      body: { filter: { "inputs.jobId": "contract-job-42" } as never },
+    });
+    expect(data!.some((r) => r.id === searchTargetRunId)).toBe(true);
+  });
+
+  it("POST /runs/search returns nothing for a filter that matches no run", async () => {
+    // This is the half that distinguishes a working filter from a server
+    // that ignores the filter and returns everything up to its limit — the
+    // exact bug this suite exists to catch (a client posting the filter map
+    // unwrapped, so the server's `req.body.filter ?? {}` silently matches
+    // every run instead of throwing or returning nothing).
+    const { data } = await client.POST("/api/v1/runs/search", {
+      body: { filter: { "inputs.jobId": "no-such-job" } as never },
+    });
+    expect(data).toEqual([]);
   });
 });

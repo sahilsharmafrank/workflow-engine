@@ -63,13 +63,15 @@ export function useSearchRuns(filter: Record<string, unknown> | null) {
     queryKey: ["runs", "search", filter],
     enabled: filter !== null,
     queryFn: async (): Promise<WorkflowRunSummary[]> =>
-      // The generated request body type for this operation is
-      // `{ filter?: Record<string, never> }`, but the server (and this
-      // screen's own MSW fixture) expects the filter map posted directly as
-      // the JSON body — see task-7-report.md. `as never` is the narrowest
-      // cast that bridges that gap without reaching for `as unknown as`.
+      // The controller reads `req.body.filter` (packages/server/src/controllers
+      // /runs.ts), so the map has to be wrapped in a `filter` key, not posted
+      // as the body itself. The generated request body type for the nested
+      // value is `Record<string, never>` — openapi-typescript's rendering of
+      // a bare `type: object` schema with no `additionalProperties: true` —
+      // so `as never` on just that value bridges a real (but narrow) schema
+      // quirk, not a shape mismatch. See task-7-report.md.
       unwrap(
-        await api.POST("/api/v1/runs/search", { body: filter as never })
+        await api.POST("/api/v1/runs/search", { body: { filter: filter as never } })
       ) as WorkflowRunSummary[],
   });
 }
