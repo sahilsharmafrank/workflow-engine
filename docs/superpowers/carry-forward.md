@@ -77,6 +77,34 @@ happy path; each is worth closing when its file is next touched.
   safer against later mutation of the source definition object.
 - **`retry`/`backoff` success path and `HTTP_STEP_MISSING_URL` are untested** in
   `core.http`.
+- **`core.http`'s SSRF guard has a DNS-rebinding residual gap (open).**
+  `assertHostAllowed` (`http-step.ts`) resolves and validates the hostname
+  itself via `dns.lookup`, but the `fetch()` call that follows performs its
+  own, independent DNS resolution when it actually opens the connection.
+  That gap between the two lookups is a time-of-check/time-of-use window: a
+  malicious or compromised DNS server can rebind the name to a blocked
+  address after the check passes, and `fetch` will connect to it anyway.
+  Closing it properly requires pinning the address this function validated
+  into the socket `fetch` opens — e.g. a custom undici dispatcher with a
+  `connect` override that forces the validated address while preserving the
+  TLS SNI/Host header — which is out of scope for the current fix. Documented
+  in README.md under `core.http` in [Built-in steps](../../README.md#built-in-steps)
+  so a reader who never opens the source learns the guard raises the bar but
+  is not airtight. A literal IP in the URL is not subject to this gap.
+- **Step-write endpoints can race a running executor (deliberately
+  deferred).** `PUT /api/v1/steps/:id/state`, `/inputs-outputs`, and
+  `/priority` (`packages/server/src/controllers/steps.ts`) write `StepRun`
+  rows directly, outside the executor's pessimistic `SELECT ... FOR UPDATE`
+  locking path (see `RunRepository`), and `StepRun` has no revision column to
+  detect a concurrent write. An operator call against a step the executor is
+  actively processing can interleave with the executor's own write and
+  silently clobber one or the other. Deliberately not fixed here: these are
+  operator repair endpoints, the engine's own execution path is properly
+  locked, and step-level locking is a migration (a revision column) plus
+  repository surgery that belongs in its own change, not folded into an
+  unrelated fix. Documented in README.md's
+  [REST API](../../README.md#rest-api) section as administrative routes that
+  can race a running executor.
 
 ### RabbitMQ driver, deferred minors
 

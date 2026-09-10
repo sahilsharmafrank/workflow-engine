@@ -152,6 +152,8 @@ Read by `loadEngineConfig()` from the environment:
 | `WFE_EXPRESSION_CONFIG_KEYS` | *(empty)* | Comma-separated allowlist filtering `expressionValues`. |
 | `WFE_LOG_LEVEL` | `info` | pino level. Tests set `silent`. |
 | `WFE_HTTP_ALLOW_PRIVATE_HOSTS` | `false` | Set `true` to let `core.http` target private, loopback, link-local, or unique-local addresses. See [Built-in steps](#built-in-steps). **Relaxing this exposes every internal service reachable from the engine to anyone who can author a workflow definition** — only set it if the deployment genuinely needs `core.http` to call internal services, and treat definitions as trusted input if you do. |
+| `WFE_MAX_SUBWORKFLOW_DEPTH` | `10` | Largest `depth` a run created via `core.subWorkflow` may have (`0` = a normally-started run, `parent.depth + 1` per nested child). Beyond this, `WorkflowManager.startWorkflow` refuses with `SUB_WORKFLOW_DEPTH_EXCEEDED`. Without a bound, a self-starting or mutually-recursive definition could recurse without limit — auth is deliberately `none` in v1, so any definition author can trigger it. Must be a non-negative integer; `0` disables nested sub-workflows entirely. |
+| `WFE_BATCH_MAX_INPUTS` | `1000` | Largest number of `inputs` a single `POST /api/v1/batch-jobs` request may fan out into runs (each started synchronously, in series). Over the limit, the request is refused with `BATCH_JOB_TOO_MANY_INPUTS` naming both the limit and the submitted size. Without a cap, a single request is an availability lever against the API — auth is deliberately `none` in v1. Must be a positive integer. |
 
 `expressionValues` — the map expressions can read via `config.*` — is set
 **programmatically**, never from the environment:
@@ -240,10 +242,10 @@ in this phase.
 | `core.transform` | Writes its resolved inputs straight to its outputs — moves and renames values with no code. |
 | `core.delay` | Suspends the run for its `seconds` input, then completes. Rejects a non-finite or negative value with `DELAY_INVALID_SECONDS`. See [Queues](#queues). |
 | `core.externalTask` | Dispatches to an external service's queue and waits for its callback. See [Queues](#queues). |
-| `core.http` | Makes an HTTP request. Supports method, headers, body, a timeout, and retry with backoff. **SSRF guard:** by default, refuses to request a target that resolves to a private, loopback, link-local, or unique-local address (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` — which covers the cloud metadata address `169.254.169.254` — `::1`, `fc00::/7`, and IPv6 link-local `fe80::/10`), throwing `HTTP_STEP_BLOCKED_HOST`. The check applies to the initial URL and to every redirect hop (redirects are followed manually rather than automatically, specifically so a public URL that 302s to a blocked address is still caught). The response body is capped at 5 MiB. Set `WFE_HTTP_ALLOW_PRIVATE_HOSTS=true` to disable the guard entirely — do this only if the deployment needs `core.http` to reach internal services, and remember that a workflow definition is untrusted input (see [Workflow definitions](#workflow-definitions)): relaxing this flag lets any definition author reach those services and read the reply back through the run's outputs. The guard resolves the hostname itself before requesting it; it does not close a DNS-rebinding race against the resolution `fetch` performs when it actually connects. |
+| `core.http` | Makes an HTTP request. Supports method, headers, body, a timeout, and retry with backoff. **SSRF guard:** by default, refuses to request a target that resolves to a private, loopback, link-local, or unique-local address (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` — which covers the cloud metadata address `169.254.169.254` — `::1`, `fc00::/7`, and IPv6 link-local `fe80::/10`), throwing `HTTP_STEP_BLOCKED_HOST`. The check applies to the initial URL and to every redirect hop (redirects are followed manually rather than automatically, specifically so a public URL that 302s to a blocked address is still caught). The response body is capped at 5 MiB. Set `WFE_HTTP_ALLOW_PRIVATE_HOSTS=true` to disable the guard entirely — do this only if the deployment needs `core.http` to reach internal services, and remember that a workflow definition is untrusted input (see [Workflow definitions](#workflow-definitions)): relaxing this flag lets any definition author reach those services and read the reply back through the run's outputs. **Known residual gap (DNS rebinding):** the guard resolves and validates the hostname itself via `dns.lookup`, but the `fetch()` call that follows performs its own, independent DNS resolution when it actually opens the connection. That gap between the two lookups is a time-of-check/time-of-use window: a malicious or compromised DNS server can rebind the name to a blocked address after the check passes, and `fetch` will connect to it anyway. Closing it fully requires pinning the validated address into the socket `fetch` opens — e.g. a custom undici dispatcher with a `connect` override — which is out of scope for the current fix; treat the guard as raising the bar, not as airtight. Tracked as an open item in [`docs/superpowers/carry-forward.md`](docs/superpowers/carry-forward.md). A literal IP in the URL isn't subject to this gap (nothing to rebind). |
 | `core.condition` | Evaluates a condition and either continues, skips the rest, or fails the run. |
-| `core.subWorkflow` | Starts a child workflow run and, optionally, waits for it to finish. |
-| `core.emitEvent` | Publishes a message to a named queue without suspending the run. |
+| `core.subWorkflow` | Starts a child workflow run and, optionally, waits for it to finish. Bounded by `WFE_MAX_SUBWORKFLOW_DEPTH` — see [Configuration](#configuration). |
+| `core.emitEvent` | Publishes a message to a named queue without suspending the run. Refuses an empty, whitespace-only, or non-string queue name (`EMIT_EVENT_INVALID_QUEUE`), and refuses to publish to either of the engine's own control queues, `DELAY_QUEUE`/`RESPONSE_QUEUE` (`EMIT_EVENT_RESERVED_QUEUE`) — without that guard a workflow could forge a resume or callback message for an arbitrary run, bypassing `core.externalTask`'s trust model. |
 
 ## Writing a step
 
@@ -566,9 +568,9 @@ load-balancer probes that don't know about the API version.
 | `GET` | `/api/v1/step-types` | List step types known to the registry. |
 | `GET` | `/api/v1/steps/next` | Claim the next runnable step (polling consumers). |
 | `POST` | `/api/v1/steps/search` | Filter step rows. |
-| `PUT` | `/api/v1/steps/:id/state` | Overwrite a step's captured state. |
-| `PUT` | `/api/v1/steps/:id/inputs-outputs` | Overwrite a step's inputs/outputs. |
-| `PUT` | `/api/v1/steps/:id/priority` | Reprioritize a queued step. |
+| `PUT` | `/api/v1/steps/:id/state` | Overwrite a step's captured state. **Administrative** — see note below. |
+| `PUT` | `/api/v1/steps/:id/inputs-outputs` | Overwrite a step's inputs/outputs. **Administrative** — see note below. |
+| `PUT` | `/api/v1/steps/:id/priority` | Reprioritize a queued step. **Administrative** — see note below. |
 | `POST` | `/api/v1/steps/dry-run` | Evaluate a step's expressions without persisting anything. |
 | `GET` | `/api/v1/filter-configuration` | Filter fields and their allowed values, derived from the registry. Drives UI filter controls. |
 | `GET`/`POST` | `/api/v1/batch-jobs` | List / create batch jobs. |
@@ -582,6 +584,21 @@ request — a null result is a 401. The only provider shipped so far is
 placeholder; a real provider is a follow-on Phase 3/4 concern once the API
 has external callers, not a `WFE_AUTH_PROVIDER` value that already does
 anything today.
+
+**`PUT /steps/:id/state`, `/inputs-outputs`, and `/priority` are operator
+repair endpoints, not part of the engine's execution path**, and they can
+race a running executor. The executor's own step writes go through
+`RunRepository`'s pessimistic `SELECT ... FOR UPDATE` locking; these three
+routes write `StepRun` rows directly, outside that path, and `StepRun` has
+no revision column to detect a concurrent write. If an operator calls one of
+these against a step the executor is actively processing, the two writes can
+interleave and one can silently clobber the other. This is a known,
+deliberately deferred limitation — see
+[`docs/superpowers/carry-forward.md`](docs/superpowers/carry-forward.md) —
+not an oversight: closing it properly needs a migration (a revision column)
+plus repository surgery, which belongs in its own change. Until then, treat
+these routes as break-glass tools to use against a step that is not
+currently running.
 
 ### CLI
 
