@@ -12,6 +12,7 @@ import { QueueSupport0002 } from "./migrations/0002-queue-support";
 import { ServerSupport0003 } from "./migrations/0003-server-support";
 import { DefinitionSnapshot0004 } from "./migrations/0004-definition-snapshot";
 import { BatchJobs0005 } from "./migrations/0005-batch-jobs";
+import { SubWorkflowLineage0006 } from "./migrations/0006-subworkflow-lineage";
 
 export function connectionOptions(config: EngineConfig): DataSourceOptions {
   return {
@@ -19,7 +20,10 @@ export function connectionOptions(config: EngineConfig): DataSourceOptions {
     url: config.dbUrl,
     namingStrategy: new SnakeNamingStrategy(),
     entities: [WorkflowDefinitionEntity, WorkflowRun, StepRun, IdempotencyKeyEntity, BatchJob],
-    migrations: [Init0001, QueueSupport0002, ServerSupport0003, DefinitionSnapshot0004, BatchJobs0005],
+    migrations: [
+      Init0001, QueueSupport0002, ServerSupport0003, DefinitionSnapshot0004, BatchJobs0005,
+      SubWorkflowLineage0006,
+    ],
     synchronize: false,
     logging: config.showSql ?? false,
   };

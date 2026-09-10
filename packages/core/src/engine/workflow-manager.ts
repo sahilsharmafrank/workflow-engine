@@ -31,6 +31,10 @@ export interface StartWorkflowInput {
   version: string;
   inputs: WorkflowParameters;
   definitionId?: number;
+  /** Set internally when this run is a child started by core.subWorkflow. */
+  parentRunId?: number;
+  /** Nesting depth in the parent chain. Omitted (or 0) for a normal start. */
+  depth?: number;
 }
 
 export class WorkflowManager {
@@ -75,6 +79,19 @@ export class WorkflowManager {
    * here — the run is left at currentStep -1 for the executor to pick up.
    */
   async startWorkflow(input: StartWorkflowInput): Promise<number> {
+    const depth = input.depth ?? 0;
+    const maxDepth = this.config.maxSubWorkflowDepth ?? 10;
+    // Checked before touching the definition or creating any row: a
+    // self-starting (or mutually-recursive) definition must be stopped
+    // before it produces another run, not merely fail after leaving one
+    // behind — otherwise this guard degrades into a slower way to run away.
+    if (depth > maxDepth) {
+      throw new WfeError(
+        `Sub-workflow depth ${depth} exceeds the configured maximum of ${maxDepth} (WFE_MAX_SUBWORKFLOW_DEPTH)`,
+        { statusCode: 400, code: "SUB_WORKFLOW_DEPTH_EXCEEDED" }
+      );
+    }
+
     const definition = await this.lookupDefinition(input);
     validateAgainstRegistry(definition.definition, this.registry);
 
@@ -83,6 +100,8 @@ export class WorkflowManager {
     run.definitionId = definition.id;
     run.name = input.name;
     run.version = input.version;
+    run.parentRunId = input.parentRunId;
+    run.depth = depth;
     run.currentStep = -1;
     run.status = WorkflowStatus.STARTING;
     run.definitionSnapshot = definition.definition;

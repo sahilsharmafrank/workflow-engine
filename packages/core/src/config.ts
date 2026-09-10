@@ -33,6 +33,16 @@ export interface EngineConfig {
    * `ctx.config`, never the full `EngineConfig`.
    */
   httpAllowPrivateHosts?: boolean;
+  /**
+   * Largest `depth` a run created via core.subWorkflow may have (0 = a
+   * normally-started run, parent.depth + 1 = each nested child).
+   * WorkflowManager.startWorkflow refuses to create a run beyond this with
+   * `SUB_WORKFLOW_DEPTH_EXCEEDED`. Without this, a self-starting (or
+   * mutually-recursive) definition could recurse without limit — auth is
+   * deliberately `none` in v1, so any definition author can trigger it.
+   * Defaults to 10.
+   */
+  maxSubWorkflowDepth?: number;
 }
 
 /**
@@ -75,6 +85,17 @@ export function loadEngineConfig(env: NodeJS.ProcessEnv = process.env): EngineCo
     lockTimeoutMs = parsed;
   }
 
+  let maxSubWorkflowDepth = 10;
+  if (env.WFE_MAX_SUBWORKFLOW_DEPTH !== undefined) {
+    const parsed = Number(env.WFE_MAX_SUBWORKFLOW_DEPTH);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw new Error(
+        `WFE_MAX_SUBWORKFLOW_DEPTH must be a non-negative integer; got "${env.WFE_MAX_SUBWORKFLOW_DEPTH}"`
+      );
+    }
+    maxSubWorkflowDepth = parsed;
+  }
+
   return {
     dbUrl,
     showSql: env.WFE_SHOW_SQL === "true",
@@ -82,5 +103,6 @@ export function loadEngineConfig(env: NodeJS.ProcessEnv = process.env): EngineCo
     expressionConfigKeys: env.WFE_EXPRESSION_CONFIG_KEYS?.split(",").map((k) => k.trim()).filter(Boolean) ?? [],
     lockTimeoutMs,
     httpAllowPrivateHosts: isHttpAllowPrivateHosts(env),
+    maxSubWorkflowDepth,
   };
 }

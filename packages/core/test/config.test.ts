@@ -51,4 +51,37 @@ describe("loadEngineConfig", () => {
     expect(isHttpAllowPrivateHosts({ ...baseEnv, WFE_HTTP_ALLOW_PRIVATE_HOSTS: "TRUE" })).toBe(false);
     expect(isHttpAllowPrivateHosts({ ...baseEnv, WFE_HTTP_ALLOW_PRIVATE_HOSTS: "1" })).toBe(false);
   });
+
+  // core.subWorkflow's recursion guard (see WorkflowManager.startWorkflow)
+  // must have a sane default, since auth is deliberately `none` in v1 and
+  // any definition author could otherwise recurse without limit.
+  it("defaults maxSubWorkflowDepth to 10", () => {
+    expect(loadEngineConfig(baseEnv).maxSubWorkflowDepth).toBe(10);
+  });
+
+  it("accepts a maxSubWorkflowDepth override", () => {
+    expect(loadEngineConfig({ ...baseEnv, WFE_MAX_SUBWORKFLOW_DEPTH: "3" }).maxSubWorkflowDepth).toBe(3);
+  });
+
+  it("accepts 0 as a maxSubWorkflowDepth override (no nested sub-workflows at all)", () => {
+    expect(loadEngineConfig({ ...baseEnv, WFE_MAX_SUBWORKFLOW_DEPTH: "0" }).maxSubWorkflowDepth).toBe(0);
+  });
+
+  it("rejects a negative maxSubWorkflowDepth at boot time", () => {
+    expect(() => loadEngineConfig({ ...baseEnv, WFE_MAX_SUBWORKFLOW_DEPTH: "-1" })).toThrow(
+      /WFE_MAX_SUBWORKFLOW_DEPTH/
+    );
+  });
+
+  it("rejects a non-integer maxSubWorkflowDepth at boot time", () => {
+    expect(() => loadEngineConfig({ ...baseEnv, WFE_MAX_SUBWORKFLOW_DEPTH: "1.5" })).toThrow(
+      /WFE_MAX_SUBWORKFLOW_DEPTH/
+    );
+  });
+
+  it("rejects a non-numeric maxSubWorkflowDepth at boot time", () => {
+    expect(() => loadEngineConfig({ ...baseEnv, WFE_MAX_SUBWORKFLOW_DEPTH: "many" })).toThrow(
+      /WFE_MAX_SUBWORKFLOW_DEPTH/
+    );
+  });
 });

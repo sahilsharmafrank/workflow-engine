@@ -16,6 +16,26 @@ export class WorkflowRun implements WorkflowRunLike {
   @Column({ type: "int", nullable: true })
   definitionId?: number;
 
+  /**
+   * Set when this run was started by a core.subWorkflow step rather than
+   * through the normal entry points. Nullable: a normally-started run has no
+   * parent. Beyond feeding the depth guard (see `depth` below and
+   * WorkflowManager.startWorkflow), this is what Phase 5's UI will use to
+   * show a run's children.
+   */
+  @Column({ type: "int", nullable: true })
+  parentRunId?: number;
+
+  /**
+   * Nesting depth in the parent chain: 0 for a normally-started run,
+   * parent.depth + 1 for a child started via core.subWorkflow. Bounded by
+   * WFE_MAX_SUBWORKFLOW_DEPTH so a self-starting (or mutually-recursive)
+   * definition cannot recurse without limit — auth is deliberately `none` in
+   * v1, so any definition author can otherwise trigger this.
+   */
+  @Column({ type: "int", nullable: false, default: 0 })
+  depth!: number;
+
   @Column({ type: "varchar", length: 256, nullable: false })
   name!: string;
 

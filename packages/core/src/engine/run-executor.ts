@@ -1,11 +1,12 @@
 import {
-  PreFlightCheckActionOutcome, StepContext, StepDefinition, StepSuspension, WorkflowStatus, isResumeBlocked,
-  resolveStepType,
+  PreFlightCheckActionOutcome, StepContext, StepDefinition, StepSuspension, WorkflowParameters, WorkflowStatus,
+  isResumeBlocked, resolveStepType,
 } from "@wfe/sdk";
 import { pick } from "lodash";
 import { WorkflowRun } from "../entities/workflow-run";
 import { WfeError } from "../errors";
 import { captureParameters } from "../expression/capture";
+import { DELAY_QUEUE } from "../queue/names";
 import { WorkflowMessage } from "../queue/types";
 import { planSuspension } from "./suspension";
 import { WorkflowManager } from "./workflow-manager";
@@ -152,8 +153,7 @@ export class RunExecutor extends WorkflowManager {
           publish: (q: string, msg: unknown) =>
             this.queue!.publish(q, msg as WorkflowMessage),
         } : undefined,
-        startChildWorkflow: (input) =>
-          this.startWorkflow({ tenantId: run.tenantId, ...input }),
+        startChildWorkflow: (input) => this.startChildWorkflow(run, input),
       };
       if (!isResume) {
         await step.start(ctx);
@@ -315,6 +315,61 @@ export class RunExecutor extends WorkflowManager {
     run.currentStep = steps.length - 1;
     run.status = WorkflowStatus.COMPLETE;
     return this.runs.saveChecked(run);
+  }
+
+  /**
+   * Starts the child run for a core.subWorkflow step.
+   *
+   * Deliberately NOT run inline here: `parent` is loaded and being advanced
+   * inside this class's own locked path (`run()`/`executeStep()` hold the
+   * parent's row via `SELECT ... FOR UPDATE` through `saveChecked`), and
+   * nesting a full child run inside that would invite long transactions and
+   * lock contention. Instead this creates the child run row, then — mirroring
+   * `publishSuspension`'s message shape exactly, since that's the resume
+   * envelope every worker already knows how to consume — publishes a
+   * zero-delay "resume step 0" message onto the delay queue, so the worker
+   * picks the child up like any other resumable run once this method (and
+   * the parent step that called it) has returned.
+   */
+  protected async startChildWorkflow(
+    parent: WorkflowRun,
+    input: { name: string; version: string; inputs: WorkflowParameters }
+  ): Promise<number> {
+    const childRunId = await this.startWorkflow({
+      tenantId: parent.tenantId,
+      name: input.name,
+      version: input.version,
+      inputs: input.inputs,
+      parentRunId: parent.id,
+      depth: (parent.depth ?? 0) + 1,
+    });
+
+    if (!this.queue) {
+      // No queue driver is configured, so there is nowhere to publish the
+      // child's resume — the in-process/no-broker deployment has no worker
+      // that will ever pick it up otherwise. Fall back to running the child
+      // synchronously here so this path still actually executes it (rather
+      // than reproducing the very bug this method exists to fix). This is
+      // the same trade-off the queue-less caller already accepts everywhere
+      // else in this codebase (e.g. a plain startWorkflow()+start() pair);
+      // it's only safe to nest here because there is no queue-backed worker
+      // depending on the parent's row lock being released promptly.
+      await this.start(parent.tenantId, childRunId);
+      return childRunId;
+    }
+
+    await this.queue.publish(
+      DELAY_QUEUE,
+      {
+        tenantId: parent.tenantId,
+        runId: childRunId,
+        stepNumber: 0,
+        kind: "resume",
+      },
+      { delaySeconds: 0 }
+    );
+
+    return childRunId;
   }
 
   /**
