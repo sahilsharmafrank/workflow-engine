@@ -17,22 +17,7 @@ export class ApiError extends Error {
 // (e.g. "/api/v1/step-types"), so the base URL is empty and every call site
 // uses the full prefixed path literal. A non-empty "/api/v1" base would
 // double the prefix.
-export const api = createClient<paths>({
-  baseUrl: "",
-  // openapi-fetch's default (`fetch: baseFetch = globalThis.fetch`) reads
-  // globalThis.fetch once, as a default-parameter value, at createClient()
-  // call time — i.e. at this module's own load time. Under Vitest, the test
-  // file's module graph (this module included) finishes loading before any
-  // beforeAll hook runs, so MSW's setupServer().listen(), which patches
-  // globalThis.fetch to intercept, hasn't run yet when that capture happens.
-  // A captured reference then permanently bypasses MSW's patched fetch for
-  // every request this client ever makes, and calls fall through to the
-  // real network ("TypeError: fetch failed"). Passing this indirection
-  // instead defers the globalThis.fetch lookup to each actual call, so it
-  // always sees whatever fetch is current — MSW's during tests, the
-  // browser's native fetch in production.
-  fetch: (request) => globalThis.fetch(request),
-});
+export const api = createClient<paths>({ baseUrl: "" });
 
 interface ServerErrorBody {
   error?: { code?: string; message?: string };

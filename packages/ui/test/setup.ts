@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { afterAll, afterEach, beforeAll } from "vitest";
+import { afterAll, afterEach } from "vitest";
 import { bridgeSignal } from "./jsdomNativeAbort";
 import { mswServer } from "./msw/server";
 
@@ -72,18 +72,16 @@ const NativeFetch = globalThis.fetch;
  * handler gets a look). jsdom doesn't paper over this because jsdom
  * doesn't implement fetch/Request itself (see the comment above); the
  * resolution browsers do implicitly simply doesn't happen anywhere in
- * this stack unless something does it explicitly. So it happens here.
- *
- * Resolved against a fixed "http://localhost" origin, not the live
- * `location.href`: Vitest's jsdom environment defaults its document URL to
- * "http://localhost:3000/" (confirmed empirically — that is *Vitest's*
- * default, not jsdom's own), which would silently mismatch the
- * "http://localhost" origin (no port) that test/msw/handlers.ts's `BASE`
- * and every handler URL in this suite already standardize on.
+ * this stack unless something does it explicitly. So it happens here,
+ * against jsdom's own `location` — pinned to "http://localhost/" via
+ * `test.environmentOptions.jsdom.url` in vite.config.ts (Vitest's jsdom
+ * environment otherwise defaults to "http://localhost:3000/", which would
+ * silently mismatch the "http://localhost" origin every handler in
+ * test/msw/handlers.ts and this suite's tests standardize on).
  */
 function resolveRelativeUrl(input: RequestInfo | URL): RequestInfo | URL {
   if (typeof input === "string" && input.startsWith("/")) {
-    return new URL(input, "http://localhost").href;
+    return new URL(input, location.href).href;
   }
   return input;
 }
@@ -104,6 +102,21 @@ globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
 // "error" rather than "warn": an unhandled request means a screen called an
 // endpoint no handler describes, which is exactly the drift this layer exists
 // to catch. Letting it through silently would defeat the point.
-beforeAll(() => mswServer.listen({ onUnhandledRequest: "error" }));
+//
+// listen() is called here at top level, NOT inside beforeAll(), and that is
+// deliberate: openapi-fetch's createClient() reads `globalThis.fetch` once,
+// as a default-parameter value, at createClient()-call time (i.e. when
+// src/api/client.ts's module-level `export const api = createClient(...)`
+// runs). Vitest fully evaluates a setup file's top-level code — this file
+// included — before it resolves the test file's own module graph, so by
+// calling listen() here rather than in a beforeAll (which only runs once
+// the test file's imports, and therefore client.ts's createClient() call,
+// have already resolved) globalThis.fetch is already MSW's patched version
+// by the time createClient() captures it. Moving this back into beforeAll
+// reopens that gap: the client's `fetch` reference would be captured before
+// MSW patches it, and every request would silently escape to the real
+// network instead of hitting a handler (confirmed empirically — see
+// .superpowers/sdd/2026-09-10-phase5-ui/task-3-report.md).
+mswServer.listen({ onUnhandledRequest: "error" });
 afterEach(() => mswServer.resetHandlers());
 afterAll(() => mswServer.close());

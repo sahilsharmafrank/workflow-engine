@@ -16,6 +16,16 @@ export default defineConfig({
     // AbortController/AbortSignal instead of jsdom's — see the comment in
     // ./test/jsdomNativeAbort.ts for why.
     environment: "./test/jsdomNativeAbort.ts",
+    // Vitest's builtin jsdom environment defaults its document URL to
+    // "http://localhost:3000/", not "http://localhost/" — the origin the
+    // MSW handlers and fixtures under test/msw/ standardize on (see
+    // test/setup.ts's resolveRelativeUrl). This flows through unchanged:
+    // Vitest passes `config.environmentOptions` as the `options` argument
+    // to any environment's setup(global, options), and
+    // ./test/jsdomNativeAbort.ts forwards that same `options` object
+    // straight through to the builtin jsdom environment's own
+    // setup(global, { jsdom }), which reads `jsdom.url` from it.
+    environmentOptions: { jsdom: { url: "http://localhost/" } },
     globals: true,
     setupFiles: ["./test/setup.ts"],
     // Contract tests start Postgres containers and are slow; they opt in

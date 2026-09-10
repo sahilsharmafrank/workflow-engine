@@ -1,4 +1,4 @@
-import { HttpResponse, http } from "msw";
+import { HttpResponse, http, passthrough } from "msw";
 import type { components, paths } from "../../src/api/schema";
 
 const BASE = "http://localhost/api/v1";
@@ -46,7 +46,19 @@ const baseHandlers = [
   http.get(`${BASE}/filter-configuration`, () => HttpResponse.json(filterConfigurationFixture)),
 ];
 
-export const handlers = [...baseHandlers];
+// test/jsdomNativeAbort.test.ts makes a real request against an ephemeral
+// loopback server to prove abort actually cancels an in-flight fetch — not
+// API drift, just infrastructure this suite exercises on purpose. Without
+// this, `onUnhandledRequest: "error"` (see test/setup.ts) logs a scary-
+// looking "no matching handler" error on every run even though the test
+// passes; letting loopback traffic through silently keeps suite output
+// pristine while still failing loudly on an actual unmocked /api/v1/* call.
+// A RegExp, not a path-to-regexp string pattern: MSW's string matcher treats
+// ":" as introducing a named path parameter, so "http://127.0.0.1:*" fails
+// to parse ("Missing parameter name") rather than matching a wildcard port.
+const loopbackPassthrough = http.all(/^http:\/\/127\.0\.0\.1:\d+/, () => passthrough());
+
+export const handlers = [loopbackPassthrough, ...baseHandlers];
 
 /** Helper for tests that need a specific failure. */
 export function errorResponse(status: number, code: string, message: string) {
