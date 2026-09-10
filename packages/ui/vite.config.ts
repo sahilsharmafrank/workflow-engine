@@ -12,7 +12,10 @@ export default defineConfig({
   },
   build: { outDir: "dist", sourcemap: true },
   test: {
-    environment: "jsdom",
+    // Wraps the built-in "jsdom" environment to keep Node's native
+    // AbortController/AbortSignal instead of jsdom's — see the comment in
+    // ./test/jsdomNativeAbort.ts for why.
+    environment: "./test/jsdomNativeAbort.ts",
     globals: true,
     setupFiles: ["./test/setup.ts"],
     // Contract tests start Postgres containers and are slow; they opt in
