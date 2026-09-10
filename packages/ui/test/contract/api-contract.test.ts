@@ -1,4 +1,4 @@
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import {
   DbContext, DefinitionRepository, ExpressionEvaluator, MemoryQueueDriver,
   RunExecutor, StepRegistry, registerBuiltInSteps, validateDefinitionShape,
@@ -12,6 +12,19 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { paths } from "../../src/api/schema";
 import { mswServer } from "../msw/server";
 
+// The `as unknown as X` casts in the assertions below are required, not
+// stylistic: the server's OpenAPI document declares `content?: never` for
+// the success responses of GET /runs, GET /runs/{id}, GET /definitions, and
+// GET /filter-configuration (see packages/server/src/openapi/spec.ts), even
+// though all four return substantive JSON bodies at runtime. That
+// under-declaration means openapi-fetch's generated `data` type resolves to
+// `never | undefined` for these calls, so a direct `as X` cast (as this
+// task's brief originally specified) is rejected by TypeScript as an
+// "insufficient overlap" conversion. GET /step-types is the one endpoint
+// here whose spec does declare a response schema, and its cast needs no
+// `unknown` step. Once a separate task declares proper response schemas for
+// the other four routes, these casts should be revisited and can likely
+// collapse back to plain `as X`.
 describe("generated client against a real server", () => {
   let container: StartedPostgreSqlContainer;
   let db: DbContext;
@@ -25,6 +38,17 @@ describe("generated client against a real server", () => {
     // MSW would intercept these requests; this suite exists precisely to avoid
     // mocks, so stand it down for the duration.
     mswServer.close();
+
+    // Imported dynamically, and only after mswServer.close() above:
+    // @testcontainers/postgresql's transitive dependency chain (dockerode ->
+    // docker-modem -> ssh2) includes ssh2's bundled Poly1305 WASM crypto
+    // module, which calls fetch() on a data: URI at module-evaluation time.
+    // A static top-level import would evaluate that chain before this
+    // beforeAll ever runs, so the fetch would fire while MSW is still
+    // listening and get logged as a spurious "unhandled request" error.
+    // Deferring the import to here, after MSW is stood down, means that
+    // module-level fetch never reaches MSW's interceptor at all.
+    const { PostgreSqlContainer } = await import("@testcontainers/postgresql");
 
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
     const config = { dbUrl: container.getConnectionUri() };
@@ -61,12 +85,38 @@ describe("generated client against a real server", () => {
   }, 180000);
 
   afterAll(async () => {
-    await new Promise<void>((res) => server.close(() => res()));
-    evaluator.dispose();
-    await queue.close();
-    await db.close();
-    await container.stop();
-    mswServer.listen({ onUnhandledRequest: "error" });
+    // beforeAll can fail partway through (container start, migrations,
+    // definition seeding, ...), and Vitest still runs this hook when it
+    // does. Each step below is independently guarded so that one failure —
+    // or one resource never having been assigned — cannot suppress the
+    // others: in particular, a failed `db.close()` must not skip
+    // `container.stop()` and leak a running Postgres container, and nothing
+    // here may skip restoring MSW.
+    const errors: unknown[] = [];
+    const guard = async (fn: () => Promise<unknown> | unknown) => {
+      try {
+        await fn();
+      } catch (err) {
+        errors.push(err);
+      }
+    };
+
+    try {
+      await guard(() => (server ? new Promise<void>((res) => server.close(() => res())) : undefined));
+      await guard(() => evaluator?.dispose());
+      await guard(() => queue?.close());
+      await guard(() => db?.close());
+      await guard(() => container?.stop());
+    } finally {
+      // Restore MSW regardless of what happened above: a failed teardown
+      // step must not also leave every later test file in this Vitest run
+      // silently talking to the real network instead of MSW.
+      mswServer.listen({ onUnhandledRequest: "error" });
+    }
+
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "one or more afterAll cleanup steps failed");
+    }
   });
 
   it("GET /step-types returns the built-in registry", async () => {
