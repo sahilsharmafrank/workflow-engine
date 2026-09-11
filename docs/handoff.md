@@ -161,6 +161,24 @@ Corollaries learned the hard way over roughly eight fix rounds:
   undefined in that context anyway; a merge test whose fixture made both
   branches produce the same value. Before trusting a test, break the thing it
   covers and watch it go red.
+- **A mock must model the server's rejection path, not just its happy path.**
+  Phase 5's final review found this three times in one screen. The MSW handler
+  for `POST /runs/search` first matched a hardcoded `"job-42"` literal, so a
+  component that ignored what the operator typed and always sent that one
+  filter passed every test. Once that was fixed to evaluate the path for real,
+  it still returned an empty `200` for an invalid filter key — while the real
+  `RunRepository.search` deliberately throws `400
+  RUN_SEARCH_INVALID_FILTER_KEY`, because, in its own comment, "a filter that
+  silently matches nothing is its own bug". A mock that models the exact
+  behaviour the server refuses teaches every future screen the wrong contract.
+  When writing a handler, read the server function it stands in for and mirror
+  its validation, not only its success case.
+- **Specify assertions by what must appear, not by what must not.** Four fix
+  instructions in Phase 5 were themselves wrong, and the implementer caught
+  each. The sharpest: "assert the empty-results text is absent" — but
+  `RunTracker` sets `rows=[]` on any error, so that text legitimately
+  co-renders with a correct error, and the assertion would have failed against
+  correct code. The right signal was the presence of an error `role="alert"`.
 - **Suite output should be pristine.** A stray `console.error` in every run is
   how a real warning gets missed later.
 - Full untruncated `Test Suites:` / `Tests:` lines, not a summary.
