@@ -105,6 +105,26 @@ export const runDetailFixture = {
   ],
 };
 
+// A separate fixture, not a mutation of runDetailFixture, so the existing
+// no-parent tests (and the stateful status above) keep meaning unchanged.
+// Exercises the sub-workflow lineage link added to workflow_run in Phase 4.
+export const childRunDetailFixture = {
+  id: 5,
+  name: "nightly",
+  version: "1.0.0",
+  status: "complete",
+  currentStep: 1,
+  updatedDate: "2026-09-10T09:30:00.000Z",
+  parentRunId: 2,
+  depth: 1,
+  inputs: {},
+  outputs: {},
+  state: {},
+  stepRuns: [
+    { id: 20, stepNumber: 0, stepName: "Sub-step", stepType: "core.noop", status: "complete", message: null, inputs: {}, outputs: {}, state: {} },
+  ],
+};
+
 // Held outside the fixture object itself so GET can reflect a restart's
 // effect and a test can observe a genuine state change rather than a
 // refetch racing a static fixture back to "failed" (see task-8-report.md,
@@ -117,11 +137,11 @@ export function resetRunDetailStatus() {
 }
 
 const runDetailHandlers = [
-  http.get(`${BASE}/runs/:id`, ({ params }) =>
-    params.id === "2"
-      ? HttpResponse.json({ ...runDetailFixture, status: runDetailStatus })
-      : errorResponse(404, "RUN_NOT_FOUND", `Run ${params.id} not found`)
-  ),
+  http.get(`${BASE}/runs/:id`, ({ params }) => {
+    if (params.id === "2") return HttpResponse.json({ ...runDetailFixture, status: runDetailStatus });
+    if (params.id === String(childRunDetailFixture.id)) return HttpResponse.json(childRunDetailFixture);
+    return errorResponse(404, "RUN_NOT_FOUND", `Run ${params.id} not found`);
+  }),
   http.put(`${BASE}/runs/:id/cancel`, () =>
     errorResponse(409, "RUN_NOT_CANCELLABLE", "Run 2 is already failed and cannot be cancelled")
   ),
