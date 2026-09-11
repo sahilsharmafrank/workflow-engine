@@ -59,10 +59,32 @@ const baseHandlers = [
 const loopbackPassthrough = http.all(/^http:\/\/127\.0\.0\.1:\d+/, () => passthrough());
 
 export const runFixtures = [
-  { id: 1, name: "nightly", version: "1.0.0", status: "complete", currentStep: 2, updatedDate: "2026-09-10T08:00:00.000Z" },
-  { id: 2, name: "nightly", version: "1.0.0", status: "failed", currentStep: 1, updatedDate: "2026-09-10T09:00:00.000Z" },
-  { id: 3, name: "adhoc", version: "2.0.0", status: "running", currentStep: 0, updatedDate: "2026-09-10T10:00:00.000Z" },
+  {
+    id: 1, name: "nightly", version: "1.0.0", status: "complete", currentStep: 2, updatedDate: "2026-09-10T08:00:00.000Z",
+    inputs: { jobId: "job-42" }, outputs: {}, state: {},
+  },
+  {
+    id: 2, name: "nightly", version: "1.0.0", status: "failed", currentStep: 1, updatedDate: "2026-09-10T09:00:00.000Z",
+    inputs: { jobId: "job-99" }, outputs: {}, state: {},
+  },
+  {
+    id: 3, name: "adhoc", version: "2.0.0", status: "running", currentStep: 0, updatedDate: "2026-09-10T10:00:00.000Z",
+    inputs: { jobId: "job-7" }, outputs: { batchId: "batch-9" }, state: {},
+  },
 ];
+
+// The only jsonb columns `/runs/search` may filter on, mirroring
+// SEARCH_JSON_COLUMNS in packages/core/src/repositories/run-repository.ts.
+const SEARCH_RUN_JSON_COLUMNS: ReadonlySet<string> = new Set(["inputs", "outputs", "state"]);
+
+// Walks a dot-path into a fixture's inputs/outputs/state object. Returns
+// undefined for a path that runs off the end or through a non-object.
+function getAtPath(node: unknown, path: string[]): unknown {
+  return path.reduce<unknown>((acc, segment) => {
+    if (typeof acc !== "object" || acc === null) return undefined;
+    return (acc as Record<string, unknown>)[segment];
+  }, node);
+}
 
 // Mirrors the server's own filtering so a test that filters proves the screen
 // sends the parameters, not merely that it renders a list.
@@ -81,9 +103,24 @@ const runHandlers = [
     // itself) — packages/server/src/controllers/runs.ts. A handler that read
     // the top level, like the request itself, would agree with a client bug
     // that silently drops the filter in production.
+    //
+    // Does a real evaluation against each fixture's actual inputs/outputs/
+    // state, exactly like RunRepository.search() parses "<column>.<path...>"
+    // and checks it against the real column — not an assertion that the
+    // caller sent one specific literal. A component that ignored the
+    // operator's search fields and always sent a hardcoded filter would fail
+    // any test that searches for a different key/value pair.
     const body = (await request.json()) as { filter?: Record<string, unknown> };
-    const wanted = body.filter?.["inputs.jobId"];
-    return HttpResponse.json(wanted === "job-42" ? [runFixtures[0]] : []);
+    const filter = body.filter ?? {};
+    const entries = Object.entries(filter);
+    const matched = runFixtures.filter((run) =>
+      entries.every(([key, value]) => {
+        const [column, ...path] = key.split(".");
+        if (!SEARCH_RUN_JSON_COLUMNS.has(column) || path.length === 0) return false;
+        return getAtPath((run as Record<string, unknown>)[column], path) === value;
+      })
+    );
+    return HttpResponse.json(matched);
   }),
 ];
 

@@ -38,4 +38,24 @@ describe("RunTracker", () => {
     const table = screen.getByRole("table");
     expect(within(table).getAllByRole("row")).toHaveLength(2); // header + one match
   });
+
+  // Deliberately a different column ("outputs", not "inputs") and value than
+  // the test above. The old MSW handler only ever recognized the literal
+  // "inputs.jobId" / "job-42" pair, so a component that hardcoded that
+  // filter (ignoring what the operator actually typed) passed every other
+  // test in this file. This one only passes if the typed key/value actually
+  // reach the request.
+  it("searches by a different jsonb path than the other search test", async () => {
+    renderWithProviders(<RunTracker />);
+    await screen.findByText("adhoc");
+
+    await userEvent.type(screen.getByLabelText("Search key"), "outputs.batchId");
+    await userEvent.type(screen.getByLabelText("Search value"), "batch-9");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    const table = await screen.findByRole("table");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2)); // header + one match
+    expect(within(table).getByText("adhoc")).toBeInTheDocument();
+    expect(within(table).queryByText("nightly")).not.toBeInTheDocument();
+  });
 });
