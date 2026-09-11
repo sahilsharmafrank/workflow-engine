@@ -1,5 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Route, Routes } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { Definitions } from "../../src/screens/Definitions";
 import { renderWithProviders } from "../renderWithProviders";
@@ -62,5 +63,18 @@ describe("Definitions", () => {
     expect(await screen.findByText(/Could not read the file as JSON/)).toBeInTheDocument();
     expect(screen.queryByText("DEFINITION_INVALID")).not.toBeInTheDocument();
     expect(screen.queryByText("name is required")).not.toBeInTheDocument();
+  });
+
+  it("navigates to the new-definition screen", async () => {
+    renderWithProviders(
+      <Routes>
+        <Route path="/definitions" element={<Definitions />} />
+        <Route path="/definitions/new" element={<div>New definition screen</div>} />
+      </Routes>,
+      { route: "/definitions" }
+    );
+    await screen.findByText("adhoc");
+    await userEvent.click(screen.getByRole("button", { name: "New Definition" }));
+    expect(await screen.findByText("New definition screen")).toBeInTheDocument();
   });
 });

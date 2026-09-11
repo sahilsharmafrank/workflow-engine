@@ -1,4 +1,5 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { DefinitionDetail } from "../../src/screens/DefinitionDetail";
@@ -34,5 +35,31 @@ describe("DefinitionDetail", () => {
   it("renders a not-found panel for a missing definition", async () => {
     renderAt("999");
     expect(await screen.findByText("Not found")).toBeInTheDocument();
+  });
+
+  it("shows Edit and Publish for a draft definition, and switches to Archive after publishing", async () => {
+    renderAt("2");
+    expect(await screen.findByText("nightly 2.0.0")).toBeInTheDocument();
+    // Not asserted by status text here: the "Versions" history table below
+    // includes this definition among its own name-siblings (see the
+    // pre-existing test above), so its status renders twice on the page —
+    // once in the header pill, once in that row — and a plain getByText
+    // would fail on the duplicate. The Edit link and the button's own label
+    // are unambiguous stand-ins for "this definition is a draft right now".
+    expect(screen.getByRole("link", { name: "Edit" })).toHaveAttribute("href", "/definitions/2/edit");
+    expect(screen.getByRole("button", { name: "Publish" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Archive" })).toBeInTheDocument());
+    expect(screen.queryByRole("link", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
+  });
+
+  it("hides Edit and the status action for an archived definition", async () => {
+    renderAt("4");
+    expect(await screen.findByText("legacy 1.0.0")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
   });
 });

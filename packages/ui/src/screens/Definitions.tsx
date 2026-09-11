@@ -48,6 +48,9 @@ export function Definitions() {
     <Stack spacing={2}>
       <Stack direction="row" spacing={2} alignItems="center">
         <Typography variant="h5">Definitions</Typography>
+        <Button variant="contained" onClick={() => navigate("/definitions/new")}>
+          New Definition
+        </Button>
         <Button component="label" variant="outlined">
           Upload
           <input
