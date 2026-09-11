@@ -13,13 +13,13 @@ describe("PreFlightCheckEditor", () => {
     };
     render(<PreFlightCheckEditor value={value} onChange={vi.fn()} />);
     expect(screen.getByLabelText("Conditions to check field name 1")).toHaveValue("x");
-    expect(screen.getByLabelText("Action on failure")).toHaveValue("skip");
+    expect(screen.getByLabelText("Action on failure")).toHaveTextContent("skip");
     expect(screen.getByLabelText("Failure message")).toHaveValue("skip when x set");
   });
 
   it("defaults to an empty condition list and a fail action when value is undefined", () => {
     render(<PreFlightCheckEditor value={undefined} onChange={vi.fn()} />);
-    expect(screen.getByLabelText("Action on failure")).toHaveValue("fail");
+    expect(screen.getByLabelText("Action on failure")).toHaveTextContent("fail");
     expect(screen.queryByLabelText(/Conditions to check field name/)).not.toBeInTheDocument();
   });
 
