@@ -52,6 +52,17 @@ describe("static UI serving", () => {
     expect(res.text).not.toContain("<title>ui</title>");
   });
 
+  it("does not shadow a bare /api with no trailing slash", async () => {
+    // The guard's lookahead was `(?!api\/)`, which only excludes "api"
+    // followed by a literal slash — "/api" itself (no trailing slash) slipped
+    // through and matched the SPA fallback, returning 200 HTML instead of a
+    // 404. Fixed to `(?!api(\/|$))` so "api" at the end of the path is
+    // excluded too.
+    const res = await request(appWithUi(root)).get("/api");
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain("<title>ui</title>");
+  });
+
   it("still answers the API when no UI is configured", async () => {
     const res = await request(appWithUi(undefined)).get("/api/v1/health");
     expect(res.status).toBe(200);

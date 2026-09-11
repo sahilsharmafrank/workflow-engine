@@ -258,3 +258,18 @@ service_completed_successfully` against a one-shot `migrate` service rather
 than having both `serve` and `worker` run migrations themselves; or simply
 having only one of the two call `runMigrations()`. Any of these belongs in
 its own change, not folded into the UI-serving work here.
+
+### A negative-lookahead prefix guard needs `(?!x(\/|$))`, not `(?!x\/)`, to exclude the bare prefix itself
+
+`packages/server/src/app.ts`'s SPA fallback route used
+`/^\/(?!api\/).*/` to keep the fallback from ever answering an `/api`
+request. The lookahead only excludes `api` followed by a literal `/`, so a
+bare `/api` (no trailing slash) doesn't match `api\/` and falls through to
+the fallback — returning a 200 with the SPA's `index.html` instead of a 404.
+Caught in final review; fixed to `/^\/(?!api(\/|$)).*/`, which excludes
+`api` followed by either `/` or end-of-string. `packages/server/test/static.
+test.ts` now has a regression test (`does not shadow a bare /api with no
+trailing slash`) asserting `GET /api` 404s when `uiRoot` is configured.
+General lesson for any future prefix-exclusion regex in this codebase: a
+negative lookahead meant to exclude "starts with X" must account for the
+bare path being exactly X, not just X followed by a separator.

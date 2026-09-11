@@ -56,7 +56,7 @@ export function createApp(deps: AppDeps): Express {
     // SPA fallback: a refresh on /runs/42 must reach the client router. Guarded
     // so it can never answer an /api/v1 request — an unmatched API path must
     // stay a 404 rather than returning HTML a client would try to parse.
-    app.get(/^\/(?!api\/).*/, (_req, res) => {
+    app.get(/^\/(?!api(\/|$)).*/, (_req, res) => {
       res.sendFile(join(deps.uiRoot!, "index.html"));
     });
   }
