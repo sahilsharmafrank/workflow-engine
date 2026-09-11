@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { WorkflowDefinitionStatus, WorkflowStatus } from "@wfe/sdk";
 import { DbContext } from "../../src/db/db-context";
+import { WorkflowDefinitionEntity } from "../../src/entities/workflow-definition";
 import { RunExecutor } from "../../src/engine/run-executor";
 import { ExpressionEvaluator } from "../../src/expression/evaluator";
 import { StepRegistry, registerBuiltInSteps } from "../../src/registry/step-registry";
@@ -57,34 +58,40 @@ describe("Definition snapshotting", () => {
   });
 
   it("uses the snapshot, not the current definition, on restart", async () => {
-    // Create a 2-step workflow as draft and update it before publishing
-    let def = await definitions.create({
+    // Create and publish a 2-step workflow
+    const def = await definitions.create({
       tenantId: "default", name: "snap-2", version: "1.0.0",
+      status: WorkflowDefinitionStatus.PUBLISHED,
       definition: { steps: [
         { stepName: "First", stepVersion: "1.0.0", stepType: "core.transform",
           stepInputs: [{ targetFieldName: "x", modelEvaluationExpression: "Number(1)" }] },
         { stepName: "Second", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] },
       ] } as any,
     });
-
-    // Update while still draft, then publish
-    def = await definitions.update("default", def.id!, {
-      definition: { steps: [
-        { stepName: "First", stepVersion: "1.0.0", stepType: "core.transform",
-          stepInputs: [{ targetFieldName: "x", modelEvaluationExpression: "Number(1)" }] },
-        { stepName: "Second", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] },
-      ] } as any,
-    });
-    def = await definitions.publish("default", def.id!);
 
     const runId = await executor.startWorkflow({
       tenantId: "default", name: "snap-2", version: "1.0.0", inputs: {},
     });
     await executor.start("default", runId);
 
-    // After publishing, the definition is immutable. Restart from step 0 — should use the snapshot
+    // Mutate the persisted definition directly (bypass the repository guard) to simulate
+    // "definition changed after run started, but run should still use its snapshot".
+    // This bypasses DefinitionRepository.update()'s guard by writing directly to the DB.
+    const ds = await db.getDataSource();
+    const entity = await ds.getRepository(WorkflowDefinitionEntity).findOneBy({ id: def.id });
+    if (entity) {
+      entity.definition = { steps: [
+        { stepName: "First", stepVersion: "1.0.0", stepType: "core.transform",
+          stepInputs: [{ targetFieldName: "x", modelEvaluationExpression: "Number(999)" }] },
+        { stepName: "Injected", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] },
+        { stepName: "Second", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] },
+      ] };
+      await ds.getRepository(WorkflowDefinitionEntity).save(entity);
+    }
+
+    // Restart from step 0 — should use the ORIGINAL 2-step snapshot, not the 3-step live definition
     const restarted = await executor.restartFromStep("default", runId, 0);
-    // The run should complete with 2 steps
+    // The run should complete with 2 steps (from snapshot), not 3 (from the live mutated definition)
     expect(restarted.stepRuns).toHaveLength(2);
     expect(restarted.status).toBe(WorkflowStatus.COMPLETE);
   });
