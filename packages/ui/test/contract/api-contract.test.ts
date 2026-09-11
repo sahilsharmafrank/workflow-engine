@@ -171,4 +171,37 @@ describe("generated client against a real server", () => {
     });
     expect(data).toEqual([]);
   });
+
+  it("creates, edits, publishes and archives a definition, rejecting an edit after publish", async () => {
+    const created = await client.POST("/api/v1/definitions", {
+      body: {
+        name: "contract-editor-target", version: "1.0.0",
+        definition: { steps: [{ stepName: "Only", stepVersion: "1.0.0", stepType: "core.transform", stepInputs: [] }] },
+      } as never,
+    });
+    expect(created.response.status).toBe(201);
+    const id = created.data!.id;
+
+    const edited = await client.PUT("/api/v1/definitions/{id}", {
+      params: { path: { id } },
+      body: { version: "1.0.1" } as never,
+    });
+    expect(edited.data!.version).toBe("1.0.1");
+
+    const published = await client.POST("/api/v1/definitions/{id}/publish", { params: { path: { id } } });
+    expect(published.data!.status).toBe("published");
+
+    // This is the assertion this suite exists to make: a definition the UI
+    // marks read-only must also be read-only against the real server, not
+    // merely against one MSW mock (design doc §8).
+    const rejectedEdit = await client.PUT("/api/v1/definitions/{id}", {
+      params: { path: { id } },
+      body: { version: "1.0.2" } as never,
+    });
+    expect(rejectedEdit.response.status).toBe(400);
+    expect(rejectedEdit.error!.error.code).toBe("DEFINITION_NOT_EDITABLE");
+
+    const archived = await client.POST("/api/v1/definitions/{id}/publish", { params: { path: { id } } });
+    expect(archived.data!.status).toBe("archived");
+  });
 });
