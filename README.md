@@ -29,7 +29,10 @@ CLI (`migrate`, `import`, `serve`, `worker`), and a `Dockerfile` plus
 creation, batch jobs that fan a definition out over many inputs, and a
 `/filter-configuration` endpoint that drives UI filters from the registry.
 
-Not built yet: the React UI. See [Roadmap](#roadmap).
+**Phase 5: browser UI.** `@wfe/ui` — a React/Vite single-page app served by
+`@wfe/server` at the same origin as the API. Five screens: step catalog, run
+tracker, run detail, definitions, and batch jobs. See [UI](#ui). The definition
+editor is deferred to Phase 5b.
 
 ## Requirements
 
@@ -47,6 +50,7 @@ Not built yet: the React UI. See [Roadmap](#roadmap).
 | `@wfe/sdk` | Dependency-free types, `WorkflowStatus`, `BaseStep`, `StepContext`. What step authors import. |
 | `@wfe/core` | The engine: entities, migrations, expression evaluator, step registry, step library, plugin loader, validation, executor, queue drivers, worker. |
 | `@wfe/server` | REST API (Express), OpenAPI spec, auth provider interface, and the `wfe` CLI. See [REST API](#rest-api). |
+| `@wfe/ui` | React/Vite single-page app: step catalog, run tracker, run detail, definitions, batch jobs. Served by `@wfe/server` at the same origin. See [UI](#ui). |
 
 ```
 packages/sdk/src      types, status model, BaseStep, StepContext
@@ -70,6 +74,11 @@ packages/server/src
   middleware/         request id, tenant resolution, error handler
   auth/               AuthProvider interface + NoneAuthProvider
   openapi/            buildOpenApiSpec() served at /api/v1/docs
+packages/ui/src
+  api/                generated client.ts, openapi.json, schema.d.ts, queryClient.ts
+  api/hooks/          useRuns, useDefinitions, useBatchJobs, useStepTypes, useFilterConfiguration
+  screens/            StepCatalog, RunTracker, RunDetail, Definitions, BatchJobs
+  components/         DataTable, FilterBar, StatusPill, ErrorState (+ EmptyState/NotFoundState), JsonView
 examples/             runnable examples + sample definitions
 ```
 
@@ -592,7 +601,8 @@ race a running executor. The executor's own step writes go through
 routes write `StepRun` rows directly, outside that path, and `StepRun` has
 no revision column to detect a concurrent write. If an operator calls one of
 these against a step the executor is actively processing, the two writes can
-interleave and one can silently clobber the other. This is a known,
+interleave and one can silently clobber the other. `@wfe/ui` does not expose
+any of these three routes for exactly this reason. This is a known,
 deliberately deferred limitation — see
 [`docs/superpowers/carry-forward.md`](docs/superpowers/carry-forward.md) —
 not an oversight: closing it properly needs a migration (a revision column)
@@ -650,6 +660,65 @@ Alpine — `npm ci`, `npm run build`, then run the CLI); `worker` overrides the
 image's default `CMD` (`wfe serve`) to run `wfe worker` instead. Both wait on
 `postgres` and `rabbitmq`'s healthchecks before starting, and are wired to
 the same credentials as [Local Postgres and RabbitMQ](#local-postgres-and-rabbitmq).
+
+`turbo run build` builds `@wfe/ui` along with everything else, so the image
+above already contains a built UI: `http://localhost:3000/` serves it, and a
+client-side route like `http://localhost:3000/runs/1` returns the app's HTML
+(not a 404) so a browser refresh works. See [UI](#ui).
+
+## UI
+
+`@wfe/ui` is a React 18 + Vite single-page app, built against the same OpenAPI
+document `@wfe/server` serves at `/api/v1/docs`. Five screens:
+
+| Screen | Purpose |
+|---|---|
+| Step catalog | Browse step types known to the registry. |
+| Run tracker | List and filter runs by status/name, search by input/output/state. |
+| Run detail | A single run's steps, inputs, outputs, and state; cancel/restart. |
+| Definitions | List, view, and import workflow definitions. |
+| Batch jobs | List batch jobs and their progress; view one job's fanned-out runs; cancel. |
+
+`@wfe/server` serves the built UI at the **same origin** as the API — in
+production there is exactly one URL, `http://localhost:3000/` by default, and
+`docker compose up` brings both up together (see
+[Quickstart with Docker Compose](#quickstart-with-docker-compose)). `createApp`
+takes this through the optional `uiRoot` dependency: when a built UI exists on
+disk, the server serves it with an SPA fallback so client-side routes survive
+a refresh; when it does not (e.g. every test in `@wfe/server`'s own suite),
+the server behaves exactly as it does without a UI at all. The SPA fallback
+never answers an `/api/v1` request, so a mistyped API path still 404s instead
+of returning HTML a client would try to parse as JSON.
+
+### Running the UI in development
+
+The UI and the API run as two separate dev processes, proxied together by Vite:
+
+```bash
+npm run build -w @wfe/server && npx wfe serve   # API on :3000 (needs WFE_DB_URL — see Configuration)
+npm run dev -w @wfe/ui                          # Vite on :5173, proxying /api to :3000
+```
+
+Open `http://localhost:5173`. Every `/api/...` call the app makes is proxied
+to the server on port 3000 (see `packages/ui/vite.config.ts`), so the app's
+own code is identical between development and the production, same-origin
+build — it always calls `/api/v1/...` with no host.
+
+### The generated API client
+
+`packages/ui/src/api/` (`openapi.json`, `schema.d.ts`, the `openapi-fetch`
+client, and `queryClient.ts`) is generated from the server's own OpenAPI
+document, not written by hand. Regenerate it after any server route or schema
+change:
+
+```bash
+npm run generate:api -w @wfe/ui
+```
+
+`test/api/schema-freshness.test.ts` regenerates into a temp directory and
+diffs it byte-for-byte against the committed client — **a stale client fails
+the `@wfe/ui` test suite**, on purpose, so a server change that reshapes a
+response the UI depends on cannot silently drift out from under it.
 
 ## Database
 
@@ -715,10 +784,11 @@ command.
 | 2 ✅ | Queue drivers (SQS, RabbitMQ), delayed and callback-resumed steps — this repo |
 | 3 ✅ | REST API, OpenAPI, CLI, Docker Compose — this repo |
 | 4 ✅ | Plugin loading, built-in step library (http, condition, sub-workflow), batch jobs, filter-configuration endpoint, definition snapshotting — this repo |
-| 5 | React UI — definitions, editor, run tracker |
+| 5 ✅ | React UI — step catalog, run tracker, run detail, definitions, batch jobs, served same-origin from `@wfe/server` — this repo |
+| 5b | Definition editor (the original `WorkflowStepsEditor` port) |
 
 Design and implementation notes live in `docs/superpowers/`. To pick this build
 up on another machine, start with [`docs/handoff.md`](docs/handoff.md) — setup,
-the verification rules, and what Phase 5 has to settle first. Deferred items
+the verification rules, and what Phase 5b has to settle first. Deferred items
 and their reasons are tracked in
 [`docs/superpowers/carry-forward.md`](docs/superpowers/carry-forward.md).

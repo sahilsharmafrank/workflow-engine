@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import express, { Express } from "express";
 import swaggerUi from "swagger-ui-express";
 import { RunExecutor, StepRegistry, DbContext, QueueDriver, ExpressionEvaluator, EngineConfig } from "@wfe/core";
@@ -21,6 +22,12 @@ export interface AppDeps {
   queue?: QueueDriver;
   /** Passed through to routes that read engine-level config, e.g. batch-jobs' `maxBatchInputs`. */
   config?: EngineConfig;
+  /**
+   * Absolute path to the built UI (packages/ui/dist). When set, the app serves
+   * it at the root with an SPA fallback. Optional so the server runs headless
+   * and so tests need no Vite build.
+   */
+  uiRoot?: string;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -43,6 +50,16 @@ export function createApp(deps: AppDeps): Express {
   app.use("/api/v1", runRoutes({ executor: deps.executor, db: deps.db }));
   app.use("/api/v1", stepRoutes({ db: deps.db, registry: deps.registry, evaluator: deps.evaluator }));
   app.use("/api/v1", batchJobRoutes({ executor: deps.executor, db: deps.db, config: deps.config }));
+
+  if (deps.uiRoot) {
+    app.use(express.static(deps.uiRoot));
+    // SPA fallback: a refresh on /runs/42 must reach the client router. Guarded
+    // so it can never answer an /api/v1 request — an unmatched API path must
+    // stay a 404 rather than returning HTML a client would try to parse.
+    app.get(/^\/(?!api\/).*/, (_req, res) => {
+      res.sendFile(join(deps.uiRoot!, "index.html"));
+    });
+  }
 
   app.use(errorHandler());
 

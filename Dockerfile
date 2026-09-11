@@ -10,6 +10,7 @@ COPY package.json package-lock.json ./
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/core/package.json packages/core/
 COPY packages/server/package.json packages/server/
+COPY packages/ui/package.json packages/ui/
 
 RUN npm ci
 

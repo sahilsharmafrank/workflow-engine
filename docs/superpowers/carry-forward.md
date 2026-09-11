@@ -112,3 +112,113 @@ Recorded during Phase 2 review and consciously not fixed: an ack/nack-vs-close
 race, bucket clamping rather than erroring on an over-cap delay, and holding-queue
 name collisions between deployments sharing a broker. None are data-loss bugs;
 all are worth a pass when the driver next gets attention.
+
+## From Phase 5 (`@wfe/ui`, static serving, Docker)
+
+### A batch job's own status is never set to `"complete"` (engine gap, not a UI one)
+
+Verified by grep during Phase 5: the only writers of `BatchJob.status` are
+`"running"` (on create), `"failed"` (the fan-out `catch`), and `"cancelled"`
+(cancel) — all in `packages/server/src/controllers/batch-jobs.ts`. There is no
+code path that ever writes `"complete"`. `computeProgress`'s own `"complete"`
+check counts completed **runs** (a different field, on the batch job's
+progress summary), not the job's `status`. Net effect: a batch job whose runs
+have all finished stays `status: "running"` indefinitely, `@wfe/ui`'s Batch
+Jobs screen shows it as perpetually in-flight, and it remains cancellable
+forever even though there is nothing left to cancel. Fixing this belongs in
+`@wfe/core`/`@wfe/server` (the engine needs to observe "all runs terminal" and
+flip the job's own status) — no UI-side workaround was applied, because
+inferring completion client-side from the progress counts would just be
+re-implementing the same logic the server should own, in the wrong layer.
+
+### `computeProgress` never buckets cancelled runs
+
+For a cancelled batch job, the three progress counts (however they are
+named/bucketed in `computeProgress`) can sum to less than `totalCount`,
+because a run that was itself cancelled is not counted into any of the three
+buckets. `@wfe/ui` handles this deliberately, not accidentally: the UI shows
+the three counts and the total as separate, independently-labeled facts and
+never derives or displays a "remaining" figure computed as `total - sum of
+counts` — there is a test in the UI suite enforcing that no such derived
+figure is rendered. If `computeProgress` later grows a `cancelled` bucket,
+that test is the one to revisit.
+
+### `PUT /api/v1/batch-jobs/{id}/cancel` returns 409 but the spec only declares 200/404
+
+The route can return `409 BATCH_JOB_NOT_CANCELLABLE` at runtime (see
+`packages/server/src/controllers/batch-jobs.ts`), but `buildOpenApiSpec`
+declares only `200` and `404` responses for it. `@wfe/ui` still handles the
+409 correctly, because it catches `ApiError` generically at the call site
+rather than switching on declared status codes — but the generated client
+gives no typed help for this case (no discriminated response type, no
+autocompletion on the error shape). Worth adding `409` to the spec next time
+`batch-jobs.ts`'s OpenAPI annotations are touched.
+
+### `WorkflowRun.definitionSnapshot` is returned but undeclared in the schema
+
+`GET /api/v1/runs/{id}` returns `definitionSnapshot` on the run (the
+Phase 4 snapshot taken at run creation), but `buildOpenApiSpec` does not
+declare that field on `WorkflowRun`. It therefore has no generated type and
+`@wfe/ui` cannot reference it without an unsound cast. Nothing in Phase 5
+needed it; flagged here so the next screen that wants to show "what
+definition did this run actually execute against" knows the data exists on
+the wire today but needs a schema fix first.
+
+### `WorkflowRun.updatedDate` and `.stepRuns` are optional in the schema but required in practice
+
+Both are declared optional in `buildOpenApiSpec`, but every run the server
+actually returns has both populated, and `@wfe/ui` treats them as required.
+This forces a documented, explained cast in three places: `useRuns.ts`,
+`useDefinitions.ts`, and `useBatchJobs.ts` (search those files for the cast
+comments). Declaring both fields required in the schema would remove all
+three casts with no behavior change — a small, low-risk spec fix.
+
+### The `/filter-configuration` date-range descriptor is dead on the UI side
+
+`GET /api/v1/filter-configuration` describes a `dateRange` filter field, but
+`FilterBar` (`packages/ui/src/components/FilterBar.tsx`) renders nothing for
+it, because the underlying `GET /api/v1/runs` only ever accepts `status`,
+`name`, `limit`, and `offset` — there is no server-side date filter for it to
+drive. Two ways to close this, either is fine: give `GET /runs` a real date
+filter and have `FilterBar` render the control, or remove the `dateRange`
+descriptor from `/filter-configuration` so the endpoint stops advertising a
+capability nothing implements.
+
+### List screens have no pagination
+
+The Run tracker, Definitions, and Batch jobs screens all call their list
+endpoints with no `limit`/`offset`, so they get the server's default page
+size (currently 50) and show no pager or "load more" control. Fine at the
+data volumes exercised so far; will misbehave (silently truncate the list,
+with no indication more rows exist) the first time a real deployment
+accumulates more than one page of runs, definitions, or batch jobs. Worth a
+pass in a follow-on phase — the server-side `limit`/`offset` parameters
+already exist, so this is UI-only work.
+
+### The drift test proves the client matches the OpenAPI document, not that the document matches the routes
+
+`packages/ui/test/api/schema-freshness.test.ts` regenerates `openapi.json` and
+`schema.d.ts` from the live `buildOpenApiSpec()` output and diffs them
+byte-for-byte against what's committed. That is a real, valuable guarantee —
+but it is a guarantee about internal consistency between the spec and the
+generated client, not about whether the spec itself describes every route the
+server actually serves. A route present in Express but missing (or
+incompletely described) in `buildOpenApiSpec` is invisible to both the
+generated client and this test — nothing fails, the UI simply cannot type
+against that route. Phase 5 hit this directly: at one point 26 of the 29
+declared operations had no declared response body at all, and a task
+(Task 9 in the Phase 5 plan) had to be inserted specifically to add response
+schemas for the twelve operations `@wfe/ui` actually consumes. There is no
+current test that walks the Express route table and asserts every route has
+a corresponding, fully-described `buildOpenApiSpec` entry — that would be the
+right follow-on to close this gap for good.
+
+### `schema-freshness.test.ts` leaks a temp directory per run
+
+The test calls `mkdtempSync(join(tmpdir(), "wfe-api-"))` to get a scratch
+directory to regenerate into, but never removes it (no `afterAll` /
+`rmSync`). Every run of the `@wfe/ui` suite leaves one more `wfe-api-*`
+directory in the OS temp dir. Harmless on a CI runner that gets torn down,
+but on a long-lived dev machine or a local watch loop this accumulates
+indefinitely. A two-line `afterAll(() => rmSync(tmp, { recursive: true,
+force: true }))` fixes it.

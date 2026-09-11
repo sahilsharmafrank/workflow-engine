@@ -2,8 +2,8 @@
 
 Everything needed to pick this project up cold. Phases 1 and 2 are merged to
 `main`. Phases 3 and 4 are both built on `feat/rest-api-cli` and not yet
-merged — that branch carries 18 commits ahead of `main`. Phases 5–6 are
-unbuilt.
+merged — that branch carries 18 commits ahead of `main`. Phase 5 is built on
+`feat/ui` and not yet merged. Phase 5b and Phase 6 are unbuilt.
 
 Read this alongside three files that are the real authorities:
 
@@ -33,7 +33,13 @@ packages/core/    @wfe/core   — entities, repositories, migrations, the
                                 RunExecutor, step registry, step library,
                                 plugin loader, queue drivers, worker
 packages/server/  @wfe/server — Express REST API, OpenAPI document, auth
-                                provider interface, and the `wfe` CLI
+                                provider interface, and the `wfe` CLI; serves
+                                the built @wfe/ui at the same origin (§8)
+packages/ui/      @wfe/ui     — React 18 + Vite SPA: a generated openapi-fetch
+                                client with a byte-for-byte drift guard, MSW
+                                and real-stack contract tests, and five
+                                screens (step catalog, run tracker, run
+                                detail, definitions, batch jobs)
 examples/         runnable examples + sample definitions
 docs/superpowers/ specs, plans, carry-forward notes
 ```
@@ -60,14 +66,33 @@ sample plugin package; `core.http`, `core.condition`, `core.subWorkflow` and
 definition snapshotting onto the run at creation; batch jobs (entity,
 repository, migration, controller); and a filter-configuration endpoint.
 
-**Not built:** the React UI (Phase 5) and anything release-related (Phase 6).
+**Phase 5 (built, unmerged)** — `@wfe/ui`: a React 18 + Vite single-page app
+generated from `@wfe/server`'s own OpenAPI document (`openapi-typescript` +
+`openapi-fetch`), with a test (`schema-freshness.test.ts`) that regenerates
+the client into a temp dir and diffs it byte-for-byte against what's
+committed, so a stale client fails the suite instead of silently drifting.
+Five screens — step catalog, run tracker, run detail, definitions, batch
+jobs — built on shared `DataTable`/`FilterBar`/`ErrorState` (+
+`EmptyState`/`NotFoundState`) components, TanStack Query hooks per resource,
+and a contract-test layer that drives the real server (Postgres +
+testcontainers) in addition to MSW-mocked unit tests. `@wfe/server` gained an
+optional `AppDeps.uiRoot`: when set, `createApp` serves the built UI at the
+root with an SPA fallback that is guarded to never shadow `/api/v1` — when
+unset (every existing server test), the server behaves exactly as it did
+before Phase 5. `docker compose up --build` now serves the API and the UI
+together on `http://localhost:3000/`. The definition editor was **not**
+built in Phase 5 — it is deferred to Phase 5b (see §5).
+
+**Not built:** the definition editor (Phase 5b) and anything release-related
+(Phase 6).
 
 ### Test state
 
 ```
-@wfe/core     30 suites / 176 tests
+@wfe/core     31 suites / 213 tests
 @wfe/sdk       3 suites /  12 tests
-@wfe/server    6 suites /  42 tests
+@wfe/server    7 suites /  51 tests
+@wfe/ui       15 suites /  59 tests
 ```
 
 Run the suite rather than trusting these; they move every phase.
@@ -200,18 +225,27 @@ From the spec's §14 build order:
 |---|---|---|
 | 3 ✅ | `@wfe/server`: REST, OpenAPI, CLI | `docker compose up`, then curl starts a run |
 | 4 ✅ | Plugin loader, built-in step library, example plugin package | A third-party step package loads and runs |
-| 5 | `@wfe/ui`: five screens | Author a definition in the UI, run it, watch it in the tracker |
+| 5 ✅ | `@wfe/ui`: step catalog, run tracker, run detail, definitions, batch jobs; served same-origin from `@wfe/server` | `docker compose up`, then watch a run in the tracker |
+| 5b | Definition editor | Author a definition in the UI |
 | 6 | Docs, examples, publish | Someone else can install it |
 
-**Phase 5** — spec §11. Vite, React 18, TypeScript, MUI 5, TanStack Query, with
-the client generated from the OpenAPI document Phase 3 produces
-(`/api/v1/docs`). Five screens: Definitions, Definition editor, Run tracker,
-Run detail, Step catalog. The editor is the densest port — the original
-`WorkflowStepsEditor` was 491 lines.
-
-The API surface Phase 5 consumes already exists, including the
-`/filter-configuration` endpoint added in Phase 4, which exists specifically so
-the UI's filter controls are driven by the registry rather than hardcoded.
+**Phase 5b — the definition editor.** The one screen spec §11 called for that
+Phase 5 deliberately did not build: a port of the original
+`WorkflowStepsEditor` (491 lines in the source monorepo), which lets an
+operator author or edit a workflow definition's steps in the browser rather
+than hand-writing JSON and calling `POST /definitions/import`. It is the
+densest single piece of UI in the spec, which is exactly why Phase 5 scoped
+it out on its own rather than risk it destabilizing the other five screens.
+Everything it needs already exists on the wire: `GET`/`PUT
+/api/v1/definitions/:id`, `POST /api/v1/definitions/:id/publish`, and
+`GET /api/v1/step-types` (backing the step catalog Phase 5 already built,
+which the editor's step picker can reuse directly). Two schema gaps are worth
+closing before or during this phase — see `carry-forward.md`: `PUT
+/batch-jobs/:id/cancel`'s undeclared 409, and the optional-vs-required drift
+on `WorkflowRun.updatedDate`/`.stepRuns` — neither blocks the editor, but the
+editor is the next screen likely to hit the same class of "declared optional,
+actually required" gap on `WorkflowDefinition`, so it's worth checking that
+schema for the same issue before writing the editor's types.
 
 **Phase 6** — packaging and publishing.
 
@@ -223,12 +257,32 @@ about service-queue consumers, and the `pg` deprecation warning — were all
 resolved during Phase 3 and are struck through there, with the resolutions
 recorded.
 
-Worth knowing before Phase 5: several small deferred items accumulated across
-Phase 4 (an untested async plugin-register path, `EmitEventStep` not validating
-an empty queue input, `ConditionStep` silently skipping on unknown action
-values, and a shallow rather than deep definition snapshot). None block the UI;
-all are recorded in the Phase 4 ledger and worth a cleanup pass when those
-files are next touched.
+Several small deferred items accumulated across Phase 4 (an untested async
+plugin-register path, `EmitEventStep` not validating an empty queue input,
+`ConditionStep` silently skipping on unknown action values, and a shallow
+rather than deep definition snapshot). None blocked the UI; all are recorded
+in the Phase 4 ledger and worth a cleanup pass when those files are next
+touched.
+
+Worth knowing before Phase 5b — all recorded in `carry-forward.md`'s Phase 5
+section with full detail:
+
+- **A batch job's own `status` is never set to `"complete"`** — an engine
+  gap (`packages/server/src/controllers/batch-jobs.ts`), not a UI one. A
+  finished batch job stays `"running"` forever and remains cancellable.
+  Worth fixing before Phase 5b or Phase 6 ships this to anyone who will
+  notice.
+- **The OpenAPI document can drift from the actual Express routes** with no
+  test catching it — the drift guard only proves the generated client
+  matches the spec, not that the spec matches the routes. Phase 5 found 26
+  of 29 operations undocumented this way and had to insert a task to fix the
+  twelve the UI needed. Worth a route-table-vs-spec test before Phase 5b
+  adds more routes to get this wrong on.
+- **No list screen paginates.** Fine today; will silently truncate results
+  the first time a deployment has more than 50 runs, definitions, or batch
+  jobs.
+- **`schema-freshness.test.ts` leaks a temp directory every run.** Trivial
+  two-line fix, not yet made.
 
 ---
 
@@ -238,9 +292,9 @@ On the new machine, from the repo root, something like:
 
 > Continuing the standalone workflow engine. Read `docs/handoff.md`, then
 > `docs/superpowers/specs/2026-09-07-standalone-workflow-engine-design.md` and
-> `docs/superpowers/carry-forward.md`. Phases 1–4 are done. I want to build
-> Phase 5 (`@wfe/ui`: the five screens, spec §11). Generate the client from the
-> OpenAPI document the server already serves, and write the Phase 5 plan.
+> `docs/superpowers/carry-forward.md`. Phases 1–5 are done. I want to build
+> Phase 5b (`@wfe/ui`'s definition editor, spec §11) — the one screen Phase 5
+> deliberately deferred. Write the Phase 5b plan.
 
 Verify the suite is green before starting — that separates a real problem from
 an environment problem, and it takes one command.

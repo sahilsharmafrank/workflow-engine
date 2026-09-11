@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { readFileSync, readdirSync } from "fs";
-import { join } from "path";
+import { existsSync, readFileSync, readdirSync } from "fs";
+import { join, resolve } from "path";
 import {
   DbContext, ExpressionEvaluator, StepRegistry, registerBuiltInSteps,
   createQueueDriver, RunExecutor, WorkflowWorker,
@@ -96,8 +96,18 @@ program
 
     const executor = new RunExecutor({ config, db, registry, evaluator, queue });
     const authProvider = new NoneAuthProvider();
+
+    // Serve the bundled UI when it has been built. Resolved from this package so
+    // it works both from source and from the Docker image layout.
+    const uiRoot = resolve(__dirname, "../../../ui/dist");
+    const uiExists = existsSync(join(uiRoot, "index.html"));
+    if (!uiExists) {
+      log.warn("No built UI found; serving the API only", { uiRoot });
+    }
+
     const app = createApp({
       executor, db, registry, authProvider, queue, evaluator, config,
+      uiRoot: uiExists ? uiRoot : undefined,
     });
 
     app.listen(config.port, () => {
