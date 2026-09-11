@@ -77,6 +77,9 @@ export const runFixtures = [
 // SEARCH_JSON_COLUMNS in packages/core/src/repositories/run-repository.ts.
 const SEARCH_RUN_JSON_COLUMNS: ReadonlySet<string> = new Set(["inputs", "outputs", "state"]);
 
+// Mirrors SEARCH_PATH_SEGMENT in packages/core/src/repositories/run-repository.ts.
+const SEARCH_PATH_SEGMENT = /^[A-Za-z0-9_-]+$/;
+
 // Walks a dot-path into a fixture's inputs/outputs/state object. Returns
 // undefined for a path that runs off the end or through a non-object.
 function getAtPath(node: unknown, path: string[]): unknown {
@@ -113,10 +116,32 @@ const runHandlers = [
     const body = (await request.json()) as { filter?: Record<string, unknown> };
     const filter = body.filter ?? {};
     const entries = Object.entries(filter);
+
+    // Mirrors RunRepository.search(): an invalid key is rejected outright,
+    // not silently dropped from the match set. The real server throws 400
+    // RUN_SEARCH_INVALID_FILTER_KEY for exactly this, precisely because a
+    // filter that silently matches nothing (or too much) is its own bug —
+    // see run-repository.ts:204-211. This mock has to fail the same way,
+    // or a UI that swallowed the error and rendered an empty-results state
+    // would pass every test here while failing against the real server.
+    for (const key of Object.keys(filter)) {
+      const [column, ...path] = key.split(".");
+      if (
+        !SEARCH_RUN_JSON_COLUMNS.has(column) ||
+        path.length === 0 ||
+        !path.every((segment) => SEARCH_PATH_SEGMENT.test(segment))
+      ) {
+        return errorResponse(
+          400,
+          "RUN_SEARCH_INVALID_FILTER_KEY",
+          `Invalid search filter key "${key}": expected "<${[...SEARCH_RUN_JSON_COLUMNS].join("|")}>.<path>", with each path segment limited to letters, digits, underscore and hyphen`
+        );
+      }
+    }
+
     const matched = runFixtures.filter((run) =>
       entries.every(([key, value]) => {
         const [column, ...path] = key.split(".");
-        if (!SEARCH_RUN_JSON_COLUMNS.has(column) || path.length === 0) return false;
         return getAtPath((run as Record<string, unknown>)[column], path) === value;
       })
     );
