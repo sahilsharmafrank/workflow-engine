@@ -62,6 +62,24 @@ describe("repositories", () => {
     await expect(definitions.findPublished("default", "wf-d", "1.0.0")).resolves.toBeNull();
   });
 
+  it("rejects updating a published definition", async () => {
+    const created = await definitions.create({
+      tenantId: "default", name: "wf-e", version: "1.0.0",
+      definition: body, status: WorkflowDefinitionStatus.PUBLISHED,
+    });
+    await expect(
+      definitions.update("default", created.id!, { version: "1.0.1" })
+    ).rejects.toMatchObject({ code: "DEFINITION_NOT_EDITABLE", statusCode: 400 });
+  });
+
+  it("updates a draft definition", async () => {
+    const created = await definitions.create({
+      tenantId: "default", name: "wf-f", version: "1.0.0", definition: body,
+    });
+    const updated = await definitions.update("default", created.id!, { version: "1.0.1" });
+    expect(updated.version).toBe("1.0.1");
+  });
+
   it("saves a run and reads it back with its steps", async () => {
     const run = new WorkflowRun();
     run.tenantId = "default";

@@ -77,6 +77,13 @@ export class DefinitionRepository {
       throw new WfeError(`Definition ${id} not found`, { statusCode: 404, code: "DEFINITION_NOT_FOUND" });
     }
 
+    if (existing.status !== WorkflowDefinitionStatus.DRAFT) {
+      throw new WfeError(
+        `Definition ${id} is ${existing.status} and cannot be edited`,
+        { statusCode: 400, code: "DEFINITION_NOT_EDITABLE" }
+      );
+    }
+
     existing.lastUpdateHistory = {
       definition: existing.definition,
       updatedDate: existing.updatedDate?.toISOString(),
