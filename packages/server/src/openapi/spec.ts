@@ -54,8 +54,26 @@ export function buildOpenApiSpec(registry: StepRegistry): Record<string, unknown
           summary: "Create a workflow definition",
           operationId: "createDefinition",
           tags: ["Definitions"],
-          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, version: { type: "string" }, definition: { type: "object" } }, required: ["name", "version", "definition"] } } } },
-          responses: { 201: { description: "Created" }, 400: { description: "Validation error" } },
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    version: { type: "string" },
+                    definition: { type: "object", additionalProperties: true },
+                  },
+                  required: ["name", "version", "definition"],
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: "Created", content: { "application/json": { schema: { $ref: "#/components/schemas/WorkflowDefinition" } } } },
+            400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } },
+          },
         },
       },
       "/api/v1/definitions/{id}": {
@@ -74,8 +92,26 @@ export function buildOpenApiSpec(registry: StepRegistry): Record<string, unknown
           operationId: "updateDefinition",
           tags: ["Definitions"],
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
-          requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
-          responses: { 200: { description: "Updated" }, 404: { description: "Not found" } },
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    version: { type: "string" },
+                    definition: { type: "object", additionalProperties: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Updated", content: { "application/json": { schema: { $ref: "#/components/schemas/WorkflowDefinition" } } } },
+            400: { description: "Validation error or non-draft definition", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } },
+            404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } },
+          },
         },
       },
       "/api/v1/definitions/{id}/publish": {
@@ -84,7 +120,11 @@ export function buildOpenApiSpec(registry: StepRegistry): Record<string, unknown
           operationId: "publishDefinition",
           tags: ["Definitions"],
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
-          responses: { 200: { description: "Status transitioned" }, 400: { description: "Invalid transition" } },
+          responses: {
+            200: { description: "Status transitioned", content: { "application/json": { schema: { $ref: "#/components/schemas/WorkflowDefinition" } } } },
+            400: { description: "Invalid transition", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } },
+            404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } },
+          },
         },
       },
       "/api/v1/definitions/import": {
