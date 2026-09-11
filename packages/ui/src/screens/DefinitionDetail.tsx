@@ -18,8 +18,10 @@ export function DefinitionDetail() {
   const { id } = useParams();
   const { data, isLoading, error } = useDefinition(Number(id));
   // Identity is name + version, so "version history" is just this definition's
-  // siblings by name — no dedicated endpoint needed.
-  const history = useDefinitions(data ? { name: data.name } : {});
+  // siblings by name — no dedicated endpoint needed. Gated on `data` so this
+  // fires once, with the real name filter, instead of first issuing a wasted
+  // unfiltered GET /definitions on every render before the detail resolves.
+  const history = useDefinitions(data ? { name: data.name } : {}, { enabled: Boolean(data) });
 
   if (isLoading) return <CircularProgress />;
   if (error instanceof ApiError && error.status === 404) return <NotFoundState message={error.message} />;

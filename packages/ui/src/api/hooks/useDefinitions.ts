@@ -25,26 +25,46 @@ export interface ImportItem {
   definition: unknown;
 }
 
-export function useDefinitions(params: { status?: string; name?: string; limit?: number; offset?: number }) {
+export function useDefinitions(
+  params: { status?: string; name?: string; limit?: number; offset?: number },
+  options?: { enabled?: boolean }
+) {
   return useQuery({
     queryKey: ["definitions", params],
-    queryFn: async (): Promise<DefinitionListResult> =>
-      // The generated query type narrows `status` to the literal union
-      // "draft" | "published" | "archived" (declared in the OpenAPI document
-      // for this endpoint only — GET /runs' `status` stays a bare `string`).
-      // FilterBar hands back whatever the server's own /filter-configuration
-      // enum values are, as plain strings, so this hook's params can't adopt
-      // that literal union without coupling to it here. The cast bridges
-      // that gap; see task-9-report.md.
-      unwrap(await api.GET("/api/v1/definitions", { params: { query: params as never } })) as DefinitionListResult,
+    enabled: options?.enabled,
+    queryFn: async (): Promise<DefinitionListResult> => {
+      const result = await api.GET("/api/v1/definitions", {
+        // The generated query type narrows `status` to the literal union
+        // "draft" | "published" | "archived" (declared in the OpenAPI
+        // document for this endpoint only — GET /runs' `status` stays a bare
+        // `string`). FilterBar hands back whatever /filter-configuration's
+        // enum values are, as plain strings, so this hook's params can't
+        // adopt that literal union without coupling to it here. This cast
+        // bridges that gap, not a real shape mismatch.
+        params: { query: params as never },
+      });
+      // The generated WorkflowDefinitionList/WorkflowDefinition schemas
+      // declare `updatedDate` as optional, while every definition this UI
+      // renders always has one (same gap as WorkflowRunList/WorkflowRun in
+      // useRuns.ts — see task-7-report.md and task-9-report.md). This cast
+      // stays because of that, not because DefinitionListResult is the wrong
+      // shape: removing it fails `tsc` on `updatedDate: string | undefined`
+      // vs. the required `string` here.
+      return unwrap(result) as DefinitionListResult;
+    },
   });
 }
 
 export function useDefinition(id: number) {
   return useQuery({
     queryKey: ["definition", id],
-    queryFn: async (): Promise<WorkflowDefinitionDetail> =>
-      unwrap(await api.GET("/api/v1/definitions/{id}", { params: { path: { id } } })) as WorkflowDefinitionDetail,
+    queryFn: async (): Promise<WorkflowDefinitionDetail> => {
+      const result = await api.GET("/api/v1/definitions/{id}", { params: { path: { id } } });
+      // Same `updatedDate` optional-vs-required gap as useDefinitions above:
+      // WorkflowDefinition declares it optional, WorkflowDefinitionDetail
+      // requires it. The cast stays for that reason, not a real mismatch.
+      return unwrap(result) as WorkflowDefinitionDetail;
+    },
   });
 }
 
@@ -58,8 +78,10 @@ export function useImportDefinitions() {
       // *response* schemas for this task's endpoints (see the ruling in
       // task-9-report.md). ImportItem[] cannot satisfy "every key maps to
       // never", so the cast bridges that schema gap, not a real shape
-      // mismatch — the server does accept named fields on each item.
-      unwrap(await api.POST("/api/v1/definitions/import", { body: items as never })) as { imported: number },
+      // mismatch — the server does accept named fields on each item. The
+      // response side needs no cast: the inline `{ imported: number }` 201
+      // schema already matches this function's return type exactly.
+      unwrap(await api.POST("/api/v1/definitions/import", { body: items as never })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["definitions"] }),
   });
 }

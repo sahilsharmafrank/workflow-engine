@@ -100,6 +100,29 @@ globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
     init ? { ...init, signal: bridgeSignal(init.signal) } : init
   )) as typeof fetch;
 
+/**
+ * Task 9 addition: jsdom's `File`/`Blob` (confirmed on jsdom 25.0.1, the
+ * version this package pins) implements only `Blob#slice` — `.text()`,
+ * `.arrayBuffer()` and `.stream()` are all `undefined`, unlike every real
+ * browser, where `Blob.prototype.text` is universally supported. The
+ * Definitions screen's upload handler calls `file.text()` on the `File`
+ * objects `userEvent.upload` hands it in tests, which are real jsdom `File`
+ * instances — so without this patch that call throws under test even though
+ * it is correct, unmodified production code. Same category of gap as the
+ * `Request`/`fetch` patches above: a jsdom limitation belongs here, not
+ * worked around in the component.
+ */
+if (typeof Blob !== "undefined" && !Blob.prototype.text) {
+  Blob.prototype.text = function (this: Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error ?? new Error("Failed to read blob"));
+      reader.readAsText(this);
+    });
+  };
+}
+
 // "error" rather than "warn": an unhandled request means a screen called an
 // endpoint no handler describes, which is exactly the drift this layer exists
 // to catch. Letting it through silently would defeat the point.

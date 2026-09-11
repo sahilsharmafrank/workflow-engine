@@ -49,4 +49,18 @@ describe("Definitions", () => {
     expect(await screen.findByText("name is required")).toBeInTheDocument();
     expect(screen.getByText("DEFINITION_INVALID")).toBeInTheDocument();
   });
+
+  it("shows a distinct message when the uploaded file isn't valid JSON at all", async () => {
+    renderWithProviders(<Definitions />);
+    await screen.findByText("adhoc");
+
+    // Genuinely malformed syntax, never reaches the server — this exercises
+    // the client-side JSON.parse catch, not the server-rejection path above.
+    const file = new File(["{ not: valid json"], "broken.json", { type: "application/json" });
+    await userEvent.upload(screen.getByLabelText("Upload definitions"), file);
+
+    expect(await screen.findByText(/Could not read the file as JSON/)).toBeInTheDocument();
+    expect(screen.queryByText("DEFINITION_INVALID")).not.toBeInTheDocument();
+    expect(screen.queryByText("name is required")).not.toBeInTheDocument();
+  });
 });

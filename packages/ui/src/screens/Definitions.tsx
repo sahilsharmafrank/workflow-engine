@@ -15,23 +15,6 @@ const columns: Column<WorkflowDefinitionSummary>[] = [
   { key: "updatedDate", header: "Updated", render: (d) => new Date(d.updatedDate).toLocaleString(), sortValue: (d) => d.updatedDate },
 ];
 
-/**
- * Reads a File as text via FileReader rather than `file.text()`. jsdom's File
- * (unlike every real browser) implements only `Blob#slice` — `.text()`,
- * `.arrayBuffer()` and `.stream()` are all `undefined` there (confirmed
- * empirically; see task-9-report.md) — so `file.text()` breaks under this
- * project's test environment even though it is fine in production. FileReader
- * is the one file-reading API jsdom implements for real, so it works in both.
- */
-function readFileAsText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
-    reader.readAsText(file);
-  });
-}
-
 export function Definitions() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -48,7 +31,7 @@ export function Definitions() {
     try {
       const items: ImportItem[] = [];
       for (const file of files) {
-        const parsed = JSON.parse(await readFileAsText(file));
+        const parsed = JSON.parse(await file.text());
         // The endpoint accepts an object or an array; flatten so one upload of
         // an array file behaves the same as several single-definition files.
         items.push(...(Array.isArray(parsed) ? parsed : [parsed]));
