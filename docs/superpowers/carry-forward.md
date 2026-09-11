@@ -222,3 +222,39 @@ directory in the OS temp dir. Harmless on a CI runner that gets torn down,
 but on a long-lived dev machine or a local watch loop this accumulates
 indefinitely. A two-line `afterAll(() => rmSync(tmp, { recursive: true,
 force: true }))` fixes it.
+
+### `docker compose up` can crash `server` on a brand-new database (engine/ops issue, found during Phase 5's compose verification, not a UI defect)
+
+Both the `serve` and `worker` commands in `packages/server/src/cli/index.ts`
+call `await db.runMigrations()` unconditionally on boot, with no locking or
+coordination between them. `docker-compose.yml` only gates both the `server`
+and `worker` services on Postgres's own healthcheck
+(`condition: service_healthy`) — nothing gates either of them on migrations
+having already been applied by the other. On a **fresh** database, this
+means the first `docker compose up -d --build` starts both containers as
+soon as Postgres reports healthy, and both immediately race to create the
+`migrations` table. One wins; the other's `CREATE TABLE "migrations"` hits
+`QueryFailedError: duplicate key value violates unique constraint
+"pg_type_typname_nsp_index"` (Postgres's own catalog uniqueness check on
+`pg_type`, since the losing transaction tries to create a type that now
+already exists) and the container that lost the race exits non-zero. This
+was hit directly during Phase 5's own end-to-end compose verification: the
+very first `docker compose up -d --build` against a brand-new database
+crashed the `server` container this way, while `worker` won the race and
+started cleanly.
+
+**Recovery:** `docker compose up -d server` again — the migrations table
+already exists by then, so the retry starts clean with no further races.
+This is why `README.md`'s Quickstart now carries a one-line caveat next to
+`docker compose up -d --build`.
+
+**Not fixed here, deliberately out of this task's scope:** this predates
+Phase 5 — `serve` and `worker` calling `runMigrations()` unconditionally
+goes back to Phase 3 — and Phase 5's job was serving the built UI, not
+compose topology. A real fix needs one of: an advisory lock around
+`runMigrations()` (e.g. Postgres `pg_advisory_lock`) so the loser waits
+instead of racing; gating `worker` on a `depends_on: condition:
+service_completed_successfully` against a one-shot `migrate` service rather
+than having both `serve` and `worker` run migrations themselves; or simply
+having only one of the two call `runMigrations()`. Any of these belongs in
+its own change, not folded into the UI-serving work here.

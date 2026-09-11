@@ -75,8 +75,9 @@ packages/server/src
   auth/               AuthProvider interface + NoneAuthProvider
   openapi/            buildOpenApiSpec() served at /api/v1/docs
 packages/ui/src
-  api/                generated client.ts, openapi.json, schema.d.ts, queryClient.ts
+  api/                generated client.ts, openapi.json, schema.d.ts
   api/hooks/          useRuns, useDefinitions, useBatchJobs, useStepTypes, useFilterConfiguration
+  queryClient.ts      TanStack Query client config (sibling of api/, not generated)
   screens/            StepCatalog, RunTracker, RunDetail, Definitions, BatchJobs
   components/         DataTable, FilterBar, StatusPill, ErrorState (+ EmptyState/NotFoundState), JsonView
 examples/             runnable examples + sample definitions
@@ -661,6 +662,12 @@ image's default `CMD` (`wfe serve`) to run `wfe worker` instead. Both wait on
 `postgres` and `rabbitmq`'s healthchecks before starting, and are wired to
 the same credentials as [Local Postgres and RabbitMQ](#local-postgres-and-rabbitmq).
 
+On a brand-new database, `server` and `worker` both run migrations on boot
+and can race each other, which can crash the `server` container on this
+very first `up`. If `curl http://localhost:3000/api/v1/health` fails right
+after bringing the stack up, run `docker compose up -d server` again — see
+[the migration race note](docs/superpowers/carry-forward.md) for why.
+
 `turbo run build` builds `@wfe/ui` along with everything else, so the image
 above already contains a built UI: `http://localhost:3000/` serves it, and a
 client-side route like `http://localhost:3000/runs/1` returns the app's HTML
@@ -706,10 +713,11 @@ build — it always calls `/api/v1/...` with no host.
 
 ### The generated API client
 
-`packages/ui/src/api/` (`openapi.json`, `schema.d.ts`, the `openapi-fetch`
-client, and `queryClient.ts`) is generated from the server's own OpenAPI
-document, not written by hand. Regenerate it after any server route or schema
-change:
+`packages/ui/src/api/openapi.json` and `packages/ui/src/api/schema.d.ts` are
+generated from the server's own OpenAPI document, not written by hand
+(`client.ts`'s `openapi-fetch` wrapper and `queryClient.ts` are hand-written
+against the generated types). Regenerate the generated pair after any server
+route or schema change:
 
 ```bash
 npm run generate:api -w @wfe/ui
