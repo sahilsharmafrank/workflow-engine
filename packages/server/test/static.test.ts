@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import request from "supertest";
@@ -24,6 +24,8 @@ describe("static UI serving", () => {
   const root = mkdtempSync(join(tmpdir(), "wfe-ui-"));
   writeFileSync(join(root, "index.html"), "<!doctype html><title>ui</title>");
   writeFileSync(join(root, "app.js"), "console.log('hi');");
+
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
 
   it("serves index.html at the root", async () => {
     const res = await request(appWithUi(root)).get("/");
