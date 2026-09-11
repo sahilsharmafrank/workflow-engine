@@ -1,5 +1,7 @@
 import { Navigate, RouteObject } from "react-router-dom";
 import { AppShell } from "./AppShell";
+import { BatchJobDetail } from "./screens/BatchJobDetail";
+import { BatchJobs } from "./screens/BatchJobs";
 import { DefinitionDetail } from "./screens/DefinitionDetail";
 import { Definitions } from "./screens/Definitions";
 import { RunDetail } from "./screens/RunDetail";
@@ -17,6 +19,8 @@ export const routes: RouteObject[] = [
       { path: "step-types", element: <StepCatalog /> },
       { path: "definitions", element: <Definitions /> },
       { path: "definitions/:id", element: <DefinitionDetail /> },
+      { path: "batch-jobs", element: <BatchJobs /> },
+      { path: "batch-jobs/:id", element: <BatchJobDetail /> },
     ],
   },
 ];

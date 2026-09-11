@@ -189,12 +189,49 @@ const definitionHandlers = [
   }),
 ];
 
+export const batchJobFixtures = [
+  {
+    id: 1, name: "reprocess-may", definitionName: "nightly", definitionVersion: "1.0.0",
+    status: "running", totalCount: 3, createdDate: "2026-09-10T07:00:00.000Z", updatedDate: "2026-09-10T07:30:00.000Z",
+  },
+  {
+    id: 2, name: "backfill", definitionName: "adhoc", definitionVersion: "1.0.0",
+    status: "failed", totalCount: 1, message: "Definition adhoc 9.9.9 not found",
+    createdDate: "2026-09-09T07:00:00.000Z", updatedDate: "2026-09-09T07:00:01.000Z",
+  },
+];
+
+export const batchJobDetailFixture = {
+  ...batchJobFixtures[0],
+  runIds: [1, 2, 3],
+  inputs: [{ x: 1 }, { x: 2 }, { x: 3 }],
+  progress: { completedCount: 1, failedCount: 1, runningCount: 1 },
+};
+
+// R3: GET /api/v1/batch-jobs returns a plain array (BatchJobRepository.list()
+// -> qb.getMany(), no wrapper) unlike the run and definition list endpoints,
+// so this handler responds with the array directly rather than { rows, total }.
+const batchJobHandlers = [
+  http.get(`${BASE}/batch-jobs`, () => HttpResponse.json(batchJobFixtures)),
+  http.get(`${BASE}/batch-jobs/:id`, ({ params }) =>
+    params.id === "1"
+      ? HttpResponse.json(batchJobDetailFixture)
+      : errorResponse(404, "BATCH_JOB_NOT_FOUND", `Batch job ${params.id} not found`)
+  ),
+  http.put(`${BASE}/batch-jobs/:id/cancel`, ({ params }) =>
+    params.id === "2"
+      ? errorResponse(409, "BATCH_JOB_NOT_CANCELLABLE", "Batch job 2 is already failed and cannot be cancelled")
+      : HttpResponse.json({ ...batchJobDetailFixture, status: "cancelled" })
+  ),
+];
+
 export const handlers = [
   loopbackPassthrough,
   ...baseHandlers,
   ...runHandlers,
   ...runDetailHandlers,
   ...definitionHandlers,
+  ...batchJobHandlers,
 ];
 
 /** Helper for tests that need a specific failure. */
