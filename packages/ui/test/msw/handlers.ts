@@ -151,7 +151,51 @@ const runDetailHandlers = [
   }),
 ];
 
-export const handlers = [loopbackPassthrough, ...baseHandlers, ...runHandlers, ...runDetailHandlers];
+export const definitionFixtures = [
+  { id: 1, name: "nightly", version: "1.0.0", status: "published", updatedDate: "2026-09-01T00:00:00.000Z" },
+  { id: 2, name: "nightly", version: "2.0.0", status: "draft", updatedDate: "2026-09-05T00:00:00.000Z" },
+  { id: 3, name: "adhoc", version: "1.0.0", status: "published", updatedDate: "2026-09-06T00:00:00.000Z" },
+];
+
+export const definitionDetailFixture = {
+  ...definitionFixtures[0],
+  definition: { steps: [{ stepName: "Prepare", stepType: "core.transform", stepVersion: "1.0.0" }] },
+};
+
+// Mirrors the server's own filtering (see runHandlers above) so the status
+// filter test proves the parameter reached the request, not just that some
+// list rendered.
+const definitionHandlers = [
+  http.get(`${BASE}/definitions`, ({ request }) => {
+    const url = new URL(request.url);
+    const name = url.searchParams.get("name");
+    const status = url.searchParams.get("status");
+    let rows = definitionFixtures;
+    if (name) rows = rows.filter((d) => d.name === name);
+    if (status) rows = rows.filter((d) => d.status === status);
+    return HttpResponse.json({ rows, total: rows.length });
+  }),
+  http.get(`${BASE}/definitions/:id`, ({ params }) =>
+    params.id === "1"
+      ? HttpResponse.json(definitionDetailFixture)
+      : errorResponse(404, "DEFINITION_NOT_FOUND", `Definition ${params.id} not found`)
+  ),
+  http.post(`${BASE}/definitions/import`, async ({ request }) => {
+    const body = await request.json();
+    const items = Array.isArray(body) ? body : [body];
+    const bad = items.find((i: { name?: string }) => !i.name);
+    if (bad) return errorResponse(400, "DEFINITION_INVALID", "name is required");
+    return HttpResponse.json({ imported: items.length }, { status: 201 });
+  }),
+];
+
+export const handlers = [
+  loopbackPassthrough,
+  ...baseHandlers,
+  ...runHandlers,
+  ...runDetailHandlers,
+  ...definitionHandlers,
+];
 
 /** Helper for tests that need a specific failure. */
 export function errorResponse(status: number, code: string, message: string) {
