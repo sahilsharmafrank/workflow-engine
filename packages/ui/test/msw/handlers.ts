@@ -217,12 +217,61 @@ export const definitionFixtures = [
   { id: 1, name: "nightly", version: "1.0.0", status: "published", updatedDate: "2026-09-01T00:00:00.000Z" },
   { id: 2, name: "nightly", version: "2.0.0", status: "draft", updatedDate: "2026-09-05T00:00:00.000Z" },
   { id: 3, name: "adhoc", version: "1.0.0", status: "published", updatedDate: "2026-09-06T00:00:00.000Z" },
+  { id: 4, name: "legacy", version: "1.0.0", status: "archived", updatedDate: "2026-08-01T00:00:00.000Z" },
 ];
 
 export const definitionDetailFixture = {
   ...definitionFixtures[0],
-  definition: { steps: [{ stepName: "Prepare", stepType: "core.transform", stepVersion: "1.0.0" }] },
+  definition: { steps: [{ stepName: "Prepare", stepType: "core.transform", stepVersion: "1.0.0", stepInputs: [] }] },
 };
+
+// A second, editable detail fixture (DRAFT) whose one step already carries a
+// real input pair — the shape DefinitionEditor's edit-flow prefill test
+// (Task 8) needs to assert against.
+export const definitionDetailFixture2 = {
+  ...definitionFixtures[1],
+  definition: {
+    steps: [{
+      stepName: "Prepare", stepType: "core.transform", stepVersion: "1.0.0",
+      stepInputs: [{ targetFieldName: "x", modelEvaluationExpression: "$.input.x" }],
+    }],
+  },
+};
+
+export const definitionDetailFixture4 = {
+  ...definitionFixtures[3],
+  definition: { steps: [{ stepName: "Old", stepType: "core.noop", stepVersion: "1.0.0", stepInputs: [] }] },
+};
+
+// Typed against the fixtures' common shape rather than `typeof
+// definitionDetailFixture` — that would pin every entry's `definition.steps`
+// to fixture 1's inferred `stepInputs: never[]`, which fixture 2's real
+// `stepInputs` entries (and fixture 4's) then fail to satisfy structurally,
+// even though all three are valid `WorkflowDefinitionDetail`-shaped fixtures.
+const definitionDetailFixtures: Record<
+  number,
+  { id: number; name: string; version: string; status: string; updatedDate: string; definition: unknown }
+> = {
+  1: definitionDetailFixture,
+  2: definitionDetailFixture2,
+  4: definitionDetailFixture4,
+};
+
+// Tracks a definition's status across a publish/archive call within one
+// test, exactly like runDetailStatus above — a static fixture can't reflect
+// the effect of a mutation a test just made, so GET/PUT/publish for a given
+// id all read through this override instead of the fixture's own `status`.
+const definitionStatusOverrides = new Map<number, string>();
+
+export function resetDefinitionStatusOverrides() {
+  definitionStatusOverrides.clear();
+}
+
+function currentDefinitionStatus(id: number, fallback: string): string {
+  return definitionStatusOverrides.get(id) ?? fallback;
+}
+
+let nextDefinitionId = 100;
 
 // Mirrors the server's own filtering (see runHandlers above) so the status
 // filter test proves the parameter reached the request, not just that some
@@ -237,11 +286,51 @@ const definitionHandlers = [
     if (status) rows = rows.filter((d) => d.status === status);
     return HttpResponse.json({ rows, total: rows.length });
   }),
-  http.get(`${BASE}/definitions/:id`, ({ params }) =>
-    params.id === "1"
-      ? HttpResponse.json(definitionDetailFixture)
-      : errorResponse(404, "DEFINITION_NOT_FOUND", `Definition ${params.id} not found`)
-  ),
+  http.get(`${BASE}/definitions/:id`, ({ params }) => {
+    const id = Number(params.id);
+    const fixture = definitionDetailFixtures[id];
+    if (!fixture) return errorResponse(404, "DEFINITION_NOT_FOUND", `Definition ${params.id} not found`);
+    return HttpResponse.json({ ...fixture, status: currentDefinitionStatus(id, fixture.status) });
+  }),
+  http.post(`${BASE}/definitions`, async ({ request }) => {
+    const body = (await request.json()) as { name?: string; version?: string; definition?: unknown };
+    if (!body.name) return errorResponse(400, "DEFINITION_INVALID", "name is required");
+    return HttpResponse.json(
+      {
+        id: nextDefinitionId++, name: body.name, version: body.version, status: "draft",
+        definition: body.definition, updatedDate: new Date().toISOString(),
+      },
+      { status: 201 }
+    );
+  }),
+  http.put(`${BASE}/definitions/:id`, async ({ params, request }) => {
+    const id = Number(params.id);
+    const fixture = definitionDetailFixtures[id];
+    if (!fixture) return errorResponse(404, "DEFINITION_NOT_FOUND", `Definition ${params.id} not found`);
+    const status = currentDefinitionStatus(id, fixture.status);
+    if (status !== "draft") {
+      return errorResponse(400, "DEFINITION_NOT_EDITABLE", `Definition ${id} is ${status} and cannot be edited`);
+    }
+    const body = (await request.json()) as { version?: string; definition?: unknown };
+    return HttpResponse.json({
+      ...fixture, status,
+      version: body.version ?? fixture.version,
+      definition: body.definition ?? fixture.definition,
+    });
+  }),
+  http.post(`${BASE}/definitions/:id/publish`, ({ params }) => {
+    const id = Number(params.id);
+    const fixture = definitionDetailFixtures[id];
+    if (!fixture) return errorResponse(404, "DEFINITION_NOT_FOUND", `Definition ${params.id} not found`);
+    const status = currentDefinitionStatus(id, fixture.status);
+    const lifecycle: Record<string, string> = { draft: "published", published: "archived" };
+    const next = lifecycle[status];
+    if (!next) {
+      return errorResponse(400, "DEFINITION_LIFECYCLE_INVALID", `Definition ${id} is ${status} and cannot be published`);
+    }
+    definitionStatusOverrides.set(id, next);
+    return HttpResponse.json({ ...fixture, status: next });
+  }),
   http.post(`${BASE}/definitions/import`, async ({ request }) => {
     const body = await request.json();
     const items = Array.isArray(body) ? body : [body];

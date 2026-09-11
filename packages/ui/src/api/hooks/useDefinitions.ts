@@ -55,15 +55,64 @@ export function useDefinitions(
   });
 }
 
-export function useDefinition(id: number) {
+export function useDefinition(id: number, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["definition", id],
+    enabled: options?.enabled,
     queryFn: async (): Promise<WorkflowDefinitionDetail> => {
       const result = await api.GET("/api/v1/definitions/{id}", { params: { path: { id } } });
       // Same `updatedDate` optional-vs-required gap as useDefinitions above:
       // WorkflowDefinition declares it optional, WorkflowDefinitionDetail
       // requires it. The cast stays for that reason, not a real mismatch.
       return unwrap(result) as WorkflowDefinitionDetail;
+    },
+  });
+}
+
+export function useCreateDefinition() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      name: string;
+      version: string;
+      definition: unknown;
+    }): Promise<WorkflowDefinitionDetail> =>
+      unwrap(await api.POST("/api/v1/definitions", { body: input as never })) as WorkflowDefinitionDetail,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["definitions"] }),
+  });
+}
+
+export function useUpdateDefinition() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: number;
+      version?: string;
+      definition?: unknown;
+    }): Promise<WorkflowDefinitionDetail> =>
+      unwrap(
+        await api.PUT("/api/v1/definitions/{id}", {
+          params: { path: { id: input.id } },
+          body: { version: input.version, definition: input.definition } as never,
+        })
+      ) as WorkflowDefinitionDetail,
+    onSuccess: (_data, input) => {
+      qc.invalidateQueries({ queryKey: ["definitions"] });
+      qc.invalidateQueries({ queryKey: ["definition", input.id] });
+    },
+  });
+}
+
+export function usePublishDefinition() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number): Promise<WorkflowDefinitionDetail> =>
+      unwrap(
+        await api.POST("/api/v1/definitions/{id}/publish", { params: { path: { id } } })
+      ) as WorkflowDefinitionDetail,
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ["definitions"] });
+      qc.invalidateQueries({ queryKey: ["definition", id] });
     },
   });
 }

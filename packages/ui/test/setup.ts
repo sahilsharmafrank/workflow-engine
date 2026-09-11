@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { afterAll, afterEach } from "vitest";
 import { bridgeSignal } from "./jsdomNativeAbort";
-import { resetRunDetailStatus } from "./msw/handlers";
+import { resetDefinitionStatusOverrides, resetRunDetailStatus } from "./msw/handlers";
 import { mswServer } from "./msw/server";
 
 /**
@@ -145,5 +145,6 @@ mswServer.listen({ onUnhandledRequest: "error" });
 afterEach(() => {
   mswServer.resetHandlers();
   resetRunDetailStatus();
+  resetDefinitionStatusOverrides();
 });
 afterAll(() => mswServer.close());
