@@ -294,7 +294,11 @@ const definitionHandlers = [
   }),
   http.post(`${BASE}/definitions`, async ({ request }) => {
     const body = (await request.json()) as { name?: string; version?: string; definition?: unknown };
-    if (!body.name) return errorResponse(400, "DEFINITION_INVALID", "name is required");
+    if (!body.name) {
+      return errorResponse(400, "DEFINITION_INVALID", "Invalid workflow definition", [
+        { path: "name", message: "name is a required field" },
+      ]);
+    }
     return HttpResponse.json(
       {
         id: nextDefinitionId++, name: body.name, version: body.version, status: "draft",
@@ -386,8 +390,13 @@ export const handlers = [
 ];
 
 /** Helper for tests that need a specific failure. */
-export function errorResponse(status: number, code: string, message: string) {
-  return HttpResponse.json({ error: { code, message } }, { status });
+export function errorResponse(
+  status: number,
+  code: string,
+  message: string,
+  details?: { path?: string; message: string }[]
+) {
+  return HttpResponse.json({ error: { code, message, ...(details ? { details } : {}) } }, { status });
 }
 
 // Referenced so an unused-import lint doesn't drop the type import that keeps

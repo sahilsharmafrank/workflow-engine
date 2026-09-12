@@ -15,7 +15,6 @@ interface FieldErrors {
   steps?: string;
   stepName?: Record<number, string>;
   stepVersion?: Record<number, string>;
-  stepInputs?: Record<number, string>;
 }
 
 function emptyStep(): StepDefinition {
@@ -38,17 +37,12 @@ function validate(name: string, isCreate: boolean, version: string, steps: StepD
   for (const [i, step] of steps.entries()) {
     if (!step.stepName.trim()) errors.stepName = { ...errors.stepName, [i]: "Step name is required." };
     if (!step.stepVersion.trim()) errors.stepVersion = { ...errors.stepVersion, [i]: "Step version is required." };
-    if (step.stepInputs.length === 0) {
-      errors.stepInputs = { ...errors.stepInputs, [i]: "At least one input is required." };
-    }
   }
   return errors;
 }
 
 function hasErrors(errors: FieldErrors): boolean {
-  return Boolean(
-    errors.name || errors.version || errors.steps || errors.stepName || errors.stepVersion || errors.stepInputs
-  );
+  return Boolean(errors.name || errors.version || errors.steps || errors.stepName || errors.stepVersion);
 }
 
 export function DefinitionEditor() {
@@ -162,7 +156,6 @@ export function DefinitionEditor() {
             />
             {touched && errors.stepName?.[i] && <FormHelperText error>{errors.stepName[i]}</FormHelperText>}
             {touched && errors.stepVersion?.[i] && <FormHelperText error>{errors.stepVersion[i]}</FormHelperText>}
-            {touched && errors.stepInputs?.[i] && <FormHelperText error>{errors.stepInputs[i]}</FormHelperText>}
           </Stack>
         ))}
       </Stack>
