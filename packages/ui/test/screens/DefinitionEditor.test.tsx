@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http } from "msw";
 import { Route, Routes, useParams } from "react-router-dom";
@@ -82,6 +82,43 @@ describe("DefinitionEditor", () => {
     await userEvent.type(screen.getByLabelText("Inputs expression 1"), "$.input.x");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/navigated to \d+/)).toBeInTheDocument();
+  });
+
+  it("includes an authored inputSchema in the saved definition", async () => {
+    renderNew();
+    await userEvent.type(screen.getByLabelText(/^Name\b/), "with-inputs");
+    await userEvent.type(screen.getByLabelText(/^Version\b/), "1.0.0");
+    await userEvent.click(screen.getByRole("button", { name: "Add step" }));
+    await userEvent.type(screen.getByLabelText(/^Step name\b/), "Only");
+    await userEvent.type(screen.getByLabelText(/^Step version\b/), "1.0.0");
+    await userEvent.type(screen.getByLabelText(/^Step type\b/), "core.noop");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add workflow input" }));
+    await userEvent.type(screen.getByLabelText("Workflow input name 1"), "jobId");
+    // getByLabelText resolves the checkbox's aria-label to MUI's outer
+    // SwitchBase span (that's where Checkbox forwards it, not the inner
+    // <input>), so within(...).getByRole("checkbox") is used to reach the
+    // actual input wherever this row's checked state needs asserting.
+    await userEvent.click(within(screen.getByLabelText("Workflow input required 1")).getByRole("checkbox"));
+
+    // The JSON preview is the saved body's source of truth (design doc §6/
+    // DefinitionEditor's existing pattern) — asserting through it proves the
+    // authored inputSchema actually reached the object that gets submitted.
+    // Read before Save: a successful save navigates to the detail stub,
+    // unmounting this screen (and its preview) along with it.
+    const preview = screen.getByText(/"inputSchema"/, { selector: "pre" });
+    expect(preview.textContent).toContain('"jobId"');
+    expect(preview.textContent).toContain('"required": true');
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/navigated to \d+/)).toBeInTheDocument();
+  });
+
+  it("pre-fills inputSchema from an existing draft definition", async () => {
+    renderEdit("2");
+    expect(await screen.findByLabelText(/^Name\b/)).toHaveValue("nightly");
+    expect(screen.getByLabelText("Workflow input name 1")).toHaveValue("jobId");
+    expect(within(screen.getByLabelText("Workflow input required 1")).getByRole("checkbox")).toBeChecked();
   });
 
   it("pre-fills from the existing draft definition, with name locked, and saves an edit", async () => {

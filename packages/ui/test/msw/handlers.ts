@@ -236,6 +236,7 @@ export const definitionDetailFixture2 = {
       stepName: "Prepare", stepType: "core.transform", stepVersion: "1.0.0",
       stepInputs: [{ targetFieldName: "x", modelEvaluationExpression: "$.input.x" }],
     }],
+    inputSchema: [{ name: "jobId", type: "string", required: true }],
   },
 };
 

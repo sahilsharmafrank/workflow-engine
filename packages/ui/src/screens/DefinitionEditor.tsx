@@ -1,11 +1,12 @@
 import { Add } from "@mui/icons-material";
 import { Alert, Button, CircularProgress, FormHelperText, Paper, Stack, TextField, Typography } from "@mui/material";
-import type { StepDefinition, WorkflowDefinitionBody } from "@wfe/sdk";
+import type { StepDefinition, WorkflowDefinitionBody, WorkflowInputField } from "@wfe/sdk";
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCreateDefinition, useDefinition, useUpdateDefinition } from "../api/hooks/useDefinitions";
 import { useStepTypes } from "../api/hooks/useStepTypes";
 import { ErrorState } from "../components/ErrorState";
+import { InputFieldEditor } from "../components/InputFieldEditor";
 import { JsonView } from "../components/JsonView";
 import { StepEditor } from "../components/StepEditor";
 
@@ -57,6 +58,7 @@ export function DefinitionEditor() {
   const [name, setName] = useState("");
   const [version, setVersion] = useState("");
   const [steps, setSteps] = useState<StepDefinition[]>([]);
+  const [inputSchema, setInputSchema] = useState<WorkflowInputField[]>([]);
   const [touched, setTouched] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
@@ -65,7 +67,9 @@ export function DefinitionEditor() {
   if (!isCreate && existing.data && !initialized) {
     setName(existing.data.name);
     setVersion(existing.data.version);
-    setSteps((existing.data.definition as WorkflowDefinitionBody).steps);
+    const body = existing.data.definition as WorkflowDefinitionBody;
+    setSteps(body.steps);
+    setInputSchema(body.inputSchema ?? []);
     setInitialized(true);
   }
 
@@ -82,7 +86,7 @@ export function DefinitionEditor() {
   function onSave() {
     setTouched(true);
     if (hasErrors(errors)) return;
-    const body: WorkflowDefinitionBody = { steps };
+    const body: WorkflowDefinitionBody = { steps, inputSchema };
     if (isCreate) {
       createDef.mutate(
         { name, version, definition: body },
@@ -138,6 +142,9 @@ export function DefinitionEditor() {
         />
       </Stack>
 
+      <Typography variant="h6">Inputs</Typography>
+      <InputFieldEditor value={inputSchema} onChange={setInputSchema} />
+
       <Typography variant="h6">Steps</Typography>
       {touched && errors.steps && <FormHelperText error>{errors.steps}</FormHelperText>}
       <Stack spacing={2}>
@@ -165,7 +172,7 @@ export function DefinitionEditor() {
 
       <Typography variant="h6">Preview</Typography>
       <Paper sx={{ p: 2 }}>
-        <JsonView value={{ steps }} />
+        <JsonView value={{ steps, inputSchema }} />
       </Paper>
 
       {mutation.error && <ErrorState error={mutation.error} />}
