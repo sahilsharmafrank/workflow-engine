@@ -96,4 +96,30 @@ describe("WorkflowManager.startWorkflow", () => {
       manager.startWorkflow({ tenantId: "default", name: "bad-wf", version: "1.0.0", inputs: {} })
     ).rejects.toThrow(/vendor\.nope/);
   });
+
+  it("rejects a run that omits a required declared input, without creating a run row", async () => {
+    await new DefinitionRepository(db).create({
+      tenantId: "default", name: "needs-job-id", version: "1.0.0",
+      status: WorkflowDefinitionStatus.PUBLISHED,
+      definition: {
+        steps: [{ stepName: "Only", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] }],
+        inputSchema: [{ name: "jobId", type: "string", required: true }],
+      },
+    });
+
+    const before = await runs.list("default", { name: "needs-job-id" });
+    await expect(
+      manager.startWorkflow({ tenantId: "default", name: "needs-job-id", version: "1.0.0", inputs: {} })
+    ).rejects.toMatchObject({ code: "RUN_INPUT_MISSING" });
+    const after = await runs.list("default", { name: "needs-job-id" });
+    expect(after.total).toBe(before.total);
+  });
+
+  it("starts a run when the required declared input is present", async () => {
+    const runId = await manager.startWorkflow({
+      tenantId: "default", name: "needs-job-id", version: "1.0.0", inputs: { jobId: "j-1" },
+    });
+    const run = await runs.findById("default", runId);
+    expect(run!.inputs).toEqual({ jobId: "j-1" });
+  });
 });

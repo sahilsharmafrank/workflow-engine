@@ -11,7 +11,7 @@ import { ExpressionEvaluator } from "../expression/evaluator";
 import { createLogger } from "../logging";
 import { QueueDriver } from "../queue/types";
 import { StepRegistry } from "../registry/step-registry";
-import { validateAgainstRegistry } from "../registry/validate";
+import { validateAgainstRegistry, validateRunInputs } from "../registry/validate";
 import { DefinitionRepository } from "../repositories/definition-repository";
 import { RunRepository } from "../repositories/run-repository";
 
@@ -94,6 +94,7 @@ export class WorkflowManager {
 
     const definition = await this.lookupDefinition(input);
     validateAgainstRegistry(definition.definition, this.registry);
+    validateRunInputs(definition.definition, input.inputs);
 
     const run = new WorkflowRun();
     run.tenantId = input.tenantId;
