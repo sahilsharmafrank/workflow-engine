@@ -21,6 +21,7 @@ describe("generated client against a real server", () => {
   let client: ReturnType<typeof createClient<paths>>;
   let runId: number;
   let searchTargetRunId: number;
+  let defs: DefinitionRepository;
 
   beforeAll(async () => {
     // MSW would intercept these requests; this suite exists precisely to avoid
@@ -49,7 +50,7 @@ describe("generated client against a real server", () => {
     queue = new MemoryQueueDriver();
     const executor = new RunExecutor({ config, db, registry, evaluator, queue });
 
-    const defs = new DefinitionRepository(db);
+    defs = new DefinitionRepository(db);
     const body = await validateDefinitionShape({
       steps: [{ stepName: "Only", stepVersion: "1.0.0", stepType: "core.transform", stepInputs: [] }],
     });
@@ -203,5 +204,28 @@ describe("generated client against a real server", () => {
 
     const archived = await client.POST("/api/v1/definitions/{id}/publish", { params: { path: { id } } });
     expect(archived.data!.status).toBe("archived");
+  });
+
+  it("rejects starting a run that omits a required declared input, then accepts it once present", async () => {
+    await defs.create({
+      tenantId: "default", name: "contract-needs-input", version: "1.0.0",
+      status: WorkflowDefinitionStatus.PUBLISHED,
+      definition: {
+        steps: [{ stepName: "Only", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] }],
+        inputSchema: [{ name: "jobId", type: "string", required: true }],
+      },
+    });
+
+    const rejected = await client.POST("/api/v1/runs", {
+      body: { name: "contract-needs-input", version: "1.0.0", inputs: {} } as never,
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.error!.error.code).toBe("RUN_INPUT_MISSING");
+
+    const accepted = await client.POST("/api/v1/runs", {
+      body: { name: "contract-needs-input", version: "1.0.0", inputs: { jobId: "j-1" } } as never,
+    });
+    expect(accepted.response.status).toBe(201);
+    expect(accepted.data!.status).toBeDefined();
   });
 });
