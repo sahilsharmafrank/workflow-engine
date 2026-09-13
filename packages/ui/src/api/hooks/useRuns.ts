@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { WorkflowParameters } from "@wfe/sdk";
 import { api, unwrap } from "../client";
 
 export interface WorkflowRunSummary {
@@ -117,5 +118,14 @@ export function useRestartRunFromStep() {
       qc.invalidateQueries({ queryKey: ["run", id] });
       qc.invalidateQueries({ queryKey: ["runs"] });
     },
+  });
+}
+
+export function useCreateRun() {
+  return useMutation({
+    mutationFn: async (
+      body: { name: string; version: string; inputs: WorkflowParameters }
+    ): Promise<{ runId: number; status: string }> =>
+      unwrap(await api.POST("/api/v1/runs", { body: body as never })) as { runId: number; status: string },
   });
 }

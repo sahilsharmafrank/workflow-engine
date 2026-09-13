@@ -101,6 +101,7 @@ const runHandlers = [
     if (name) rows = rows.filter((r) => r.name === name);
     return HttpResponse.json({ rows, total: rows.length });
   }),
+  http.post(`${BASE}/runs`, () => HttpResponse.json({ runId: 42, status: "starting" }, { status: 201 })),
   http.post(`${BASE}/runs/search`, async ({ request }) => {
     // Mirrors the controller, which reads `req.body.filter` (not the body
     // itself) — packages/server/src/controllers/runs.ts. A handler that read
