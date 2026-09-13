@@ -60,6 +60,17 @@ export async function validateDefinitionShape(body: unknown): Promise<WorkflowDe
 
 /** Rejects a definition that names an unregistered step type or reuses a step name. */
 export function validateAgainstRegistry(body: WorkflowDefinitionBody, registry: StepRegistry): void {
+  const seenInputNames = new Set<string>();
+  for (const field of body.inputSchema ?? []) {
+    if (seenInputNames.has(field.name)) {
+      throw new WfeError(
+        `Duplicate input name "${field.name}" — input names must be unique`,
+        { statusCode: 400, code: "DEFINITION_DUPLICATE_INPUT_NAME" }
+      );
+    }
+    seenInputNames.add(field.name);
+  }
+
   const seen = new Set<string>();
   for (const step of body.steps) {
     if (seen.has(step.stepName)) {
@@ -99,11 +110,11 @@ export function validateRunInputs(
 ): void {
   const missing = (definition.inputSchema ?? [])
     .filter((field) => field.required && !(field.name in inputs))
-    .map((field) => ({ name: field.name }));
+    .map((field) => ({ path: field.name, message: `${field.name} is required` }));
 
   if (missing.length > 0) {
     throw new WfeError(
-      `Missing required input(s): ${missing.map((m) => m.name).join(", ")}`,
+      `Missing required input(s): ${missing.map((m) => m.path).join(", ")}`,
       { statusCode: 400, code: "RUN_INPUT_MISSING", details: missing }
     );
   }

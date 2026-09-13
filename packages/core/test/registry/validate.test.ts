@@ -62,6 +62,19 @@ describe("definition validation", () => {
     expect(() => validateAgainstRegistry(parsed, registry)).toThrow(/Same/);
   });
 
+  it("rejects duplicate input names, which would break run-input addressing", async () => {
+    const parsed = await validateDefinitionShape({
+      steps: [{ stepName: "Only", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] }],
+      inputSchema: [
+        { name: "jobId", type: "string", required: true },
+        { name: "jobId", type: "string", required: false },
+      ],
+    });
+    const registry = new StepRegistry();
+    registerBuiltInSteps(registry);
+    expect(() => validateAgainstRegistry(parsed, registry)).toThrow(/jobId/);
+  });
+
   it("rejects a step missing both stepType and stepClassName with a WfeError", async () => {
     const parsed = await validateDefinitionShape({
       steps: [{ stepName: "NoType", stepVersion: "1.0.0", stepInputs: [] }],
@@ -180,7 +193,10 @@ describe("validateRunInputs", () => {
       const wfeErr = err as WfeError;
       expect(wfeErr.statusCode).toBe(400);
       expect(wfeErr.code).toBe("RUN_INPUT_MISSING");
-      expect(wfeErr.details).toEqual([{ name: "jobId" }, { name: "region" }]);
+      expect(wfeErr.details).toEqual([
+        { path: "jobId", message: "jobId is required" },
+        { path: "region", message: "region is required" },
+      ]);
     }
   });
 

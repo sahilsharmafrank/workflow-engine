@@ -1,9 +1,11 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http } from "msw";
 import { Route, Routes, useParams } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { RunForm } from "../../src/screens/RunForm";
-import { lastCreateRunRequest, resetLastCreateRunRequest } from "../msw/handlers";
+import { errorResponse, lastCreateRunRequest, resetLastCreateRunRequest } from "../msw/handlers";
+import { mswServer } from "../msw/server";
 import { renderWithProviders } from "../renderWithProviders";
 
 function RunDetailStub() {
@@ -54,6 +56,25 @@ describe("RunForm", () => {
         name: "adhoc", version: "1.0.0", inputs: { jobId: "job-1", dryRun: true },
       })
     );
+  });
+
+  it("renders a readable message when the server rejects a missing required input", async () => {
+    mswServer.use(
+      http.post("http://localhost/api/v1/runs", () =>
+        errorResponse(400, "RUN_INPUT_MISSING", "Missing required input(s): jobId", [
+          { path: "jobId", message: "jobId is required" },
+        ])
+      )
+    );
+    renderAt("3");
+    await userEvent.type(await screen.findByLabelText(/^jobId\b/), "job-1");
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(await screen.findByText("Missing required input(s): jobId")).toBeInTheDocument();
+    // ErrorState renders `${path}: ` and `message` as sibling text nodes
+    // inside one <Typography>, so their joined node text is
+    // "jobId: jobId is required" — an exact-match getByText would miss it,
+    // so this asserts the substring instead of the whole node text.
+    expect(screen.getByText("jobId is required", { exact: false })).toBeInTheDocument();
   });
 
   it("renders a definition with no inputSchema as a form with just the Run button", async () => {

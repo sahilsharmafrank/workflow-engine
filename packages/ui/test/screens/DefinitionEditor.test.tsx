@@ -69,6 +69,21 @@ describe("DefinitionEditor", () => {
     expect(screen.queryByText("At least one input is required.")).not.toBeInTheDocument();
   });
 
+  it("blocks Save and shows an inline error when a workflow input has no name", async () => {
+    renderNew();
+    await userEvent.type(screen.getByLabelText(/^Name\b/), "wf");
+    await userEvent.type(screen.getByLabelText(/^Version\b/), "1.0.0");
+    await userEvent.click(screen.getByRole("button", { name: "Add step" }));
+    await userEvent.type(screen.getByLabelText(/^Step name\b/), "Only");
+    await userEvent.type(screen.getByLabelText(/^Step version\b/), "1.0.0");
+    await userEvent.type(screen.getByLabelText(/^Step type\b/), "core.noop");
+    await userEvent.click(screen.getByRole("button", { name: "Add workflow input" }));
+    // Deliberately leave "Workflow input name 1" blank.
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Input name is required.")).toBeInTheDocument();
+    expect(screen.queryByText(/navigated to/)).not.toBeInTheDocument();
+  });
+
   it("creates a definition from a filled-in form and navigates to its detail page", async () => {
     renderNew();
     await userEvent.type(screen.getByLabelText(/^Name\b/), "new-wf");

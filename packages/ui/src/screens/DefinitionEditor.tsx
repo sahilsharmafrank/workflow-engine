@@ -16,6 +16,7 @@ interface FieldErrors {
   steps?: string;
   stepName?: Record<number, string>;
   stepVersion?: Record<number, string>;
+  inputName?: Record<number, string>;
 }
 
 function emptyStep(): StepDefinition {
@@ -29,7 +30,9 @@ function emptyStep(): StepDefinition {
  * else — duplicate names, unknown types, DEFINITION_INVALID's own field
  * list — is left to the server response, surfaced verbatim through ErrorState.
  */
-function validate(name: string, isCreate: boolean, version: string, steps: StepDefinition[]): FieldErrors {
+function validate(
+  name: string, isCreate: boolean, version: string, steps: StepDefinition[], inputSchema: WorkflowInputField[]
+): FieldErrors {
   const errors: FieldErrors = {};
   if (isCreate && !name.trim()) errors.name = "Name is required.";
   if (!version.trim()) errors.version = "Version is required.";
@@ -39,11 +42,18 @@ function validate(name: string, isCreate: boolean, version: string, steps: StepD
     if (!step.stepName.trim()) errors.stepName = { ...errors.stepName, [i]: "Step name is required." };
     if (!step.stepVersion.trim()) errors.stepVersion = { ...errors.stepVersion, [i]: "Step version is required." };
   }
+
+  for (const [i, field] of inputSchema.entries()) {
+    if (!field.name.trim()) errors.inputName = { ...errors.inputName, [i]: "Input name is required." };
+  }
+
   return errors;
 }
 
 function hasErrors(errors: FieldErrors): boolean {
-  return Boolean(errors.name || errors.version || errors.steps || errors.stepName || errors.stepVersion);
+  return Boolean(
+    errors.name || errors.version || errors.steps || errors.stepName || errors.stepVersion || errors.inputName
+  );
 }
 
 export function DefinitionEditor() {
@@ -73,7 +83,10 @@ export function DefinitionEditor() {
     setInitialized(true);
   }
 
-  const errors = useMemo(() => validate(name, isCreate, version, steps), [name, isCreate, version, steps]);
+  const errors = useMemo(
+    () => validate(name, isCreate, version, steps, inputSchema),
+    [name, isCreate, version, steps, inputSchema]
+  );
 
   if (!isCreate && existing.isLoading) return <CircularProgress />;
   if (!isCreate && existing.error) return <ErrorState error={existing.error} />;
@@ -144,6 +157,9 @@ export function DefinitionEditor() {
 
       <Typography variant="h6">Inputs</Typography>
       <InputFieldEditor value={inputSchema} onChange={setInputSchema} />
+      {inputSchema.map((_, i) => (
+        touched && errors.inputName?.[i] && <FormHelperText key={i} error>{errors.inputName[i]}</FormHelperText>
+      ))}
 
       <Typography variant="h6">Steps</Typography>
       {touched && errors.steps && <FormHelperText error>{errors.steps}</FormHelperText>}
