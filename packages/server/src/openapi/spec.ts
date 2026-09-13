@@ -143,7 +143,10 @@ export function buildOpenApiSpec(registry: StepRegistry): Record<string, unknown
           tags: ["Runs"],
           parameters: [{ name: "Idempotency-Key", in: "header", schema: { type: "string" } }],
           requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, version: { type: "string" }, inputs: { type: "object" } }, required: ["name", "version"] } } } },
-          responses: { 201: { description: "Run started" }, 200: { description: "Idempotent replay" } },
+          responses: {
+            201: { description: "Run started", content: { "application/json": { schema: { type: "object", properties: { runId: { type: "integer" }, status: { type: "string" } }, required: ["runId", "status"] } } } },
+            200: { description: "Idempotent replay", content: { "application/json": { schema: { type: "object", properties: { runId: { type: "integer" }, status: { type: "string" } }, required: ["runId", "status"] } } } },
+          },
         },
         get: {
           summary: "List workflow runs",

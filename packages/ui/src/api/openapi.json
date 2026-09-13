@@ -420,10 +420,48 @@
         },
         "responses": {
           "200": {
-            "description": "Idempotent replay"
+            "description": "Idempotent replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "status"
+                  ]
+                }
+              }
+            }
           },
           "201": {
-            "description": "Run started"
+            "description": "Run started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "status"
+                  ]
+                }
+              }
+            }
           }
         }
       },

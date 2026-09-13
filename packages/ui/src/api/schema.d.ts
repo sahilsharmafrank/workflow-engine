@@ -873,14 +873,24 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        runId: number;
+                        status: string;
+                    };
+                };
             };
             /** @description Run started */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        runId: number;
+                        status: string;
+                    };
+                };
             };
         };
     };
