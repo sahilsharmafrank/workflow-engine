@@ -7,6 +7,15 @@ export interface ParameterCaptureExpression {
   modelEvaluationExpression: string;
 }
 
+export type WorkflowInputFieldType = "string" | "number" | "boolean" | "json";
+
+export interface WorkflowInputField {
+  name: string;
+  type: WorkflowInputFieldType;
+  required: boolean;
+  description?: string;
+}
+
 export interface PreFlightCheckParameters {
   conditionsToCheck: ParameterCaptureExpression[];
   actionOnFailure: PreFlightCheckActionOutcome;
@@ -34,6 +43,7 @@ export interface StepDefinition {
 
 export interface WorkflowDefinitionBody {
   steps: StepDefinition[];
+  inputSchema?: WorkflowInputField[];
 }
 
 export interface StepProgress {

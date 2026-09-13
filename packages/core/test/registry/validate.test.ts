@@ -1,5 +1,5 @@
 import { StepRegistry, registerBuiltInSteps } from "../../src/registry/step-registry";
-import { validateAgainstRegistry, validateDefinitionShape } from "../../src/registry/validate";
+import { validateAgainstRegistry, validateDefinitionShape, validateRunInputs } from "../../src/registry/validate";
 import { WfeError } from "../../src/errors";
 
 const valid = {
@@ -102,5 +102,89 @@ describe("definition validation", () => {
       expect(Array.isArray(wfeErr.details)).toBe(true);
       expect((wfeErr.details as Array<any>).length).toBeGreaterThanOrEqual(3);
     }
+  });
+});
+
+describe("input schema shape validation", () => {
+  it("accepts a definition whose inputSchema declares valid fields", async () => {
+    const body = {
+      steps: [{ stepName: "A", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] }],
+      inputSchema: [
+        { name: "jobId", type: "string", required: true },
+        { name: "dryRun", type: "boolean", required: false, description: "Skip side effects" },
+      ],
+    };
+    await expect(validateDefinitionShape(body)).resolves.toMatchObject({
+      inputSchema: [
+        { name: "jobId", type: "string", required: true },
+        { name: "dryRun", type: "boolean", required: false },
+      ],
+    });
+  });
+
+  it("rejects an inputSchema field with an unknown type", async () => {
+    const body = {
+      steps: [{ stepName: "A", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] }],
+      inputSchema: [{ name: "jobId", type: "uuid", required: true }],
+    };
+    await expect(validateDefinitionShape(body)).rejects.toThrow();
+  });
+
+  it("rejects an inputSchema field missing its name", async () => {
+    const body = {
+      steps: [{ stepName: "A", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] }],
+      inputSchema: [{ type: "string", required: true }],
+    };
+    await expect(validateDefinitionShape(body)).rejects.toThrow();
+  });
+
+  it("accepts a definition with no inputSchema at all", async () => {
+    const body = {
+      steps: [{ stepName: "A", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] }],
+    };
+    const parsed = await validateDefinitionShape(body);
+    expect(parsed.inputSchema).toBeUndefined();
+  });
+});
+
+describe("validateRunInputs", () => {
+  const withSchema = {
+    steps: [],
+    inputSchema: [
+      { name: "jobId", type: "string" as const, required: true },
+      { name: "note", type: "string" as const, required: false },
+    ],
+  };
+
+  it("does nothing when every required field is present", () => {
+    expect(() => validateRunInputs(withSchema, { jobId: "j-1" })).not.toThrow();
+  });
+
+  it("allows extra inputs not named in the schema", () => {
+    expect(() => validateRunInputs(withSchema, { jobId: "j-1", extra: 42 })).not.toThrow();
+  });
+
+  it("throws a WfeError listing every missing required field", () => {
+    const twoRequired = {
+      steps: [],
+      inputSchema: [
+        { name: "jobId", type: "string" as const, required: true },
+        { name: "region", type: "string" as const, required: true },
+      ],
+    };
+    try {
+      validateRunInputs(twoRequired, {});
+      fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WfeError);
+      const wfeErr = err as WfeError;
+      expect(wfeErr.statusCode).toBe(400);
+      expect(wfeErr.code).toBe("RUN_INPUT_MISSING");
+      expect(wfeErr.details).toEqual([{ name: "jobId" }, { name: "region" }]);
+    }
+  });
+
+  it("is a no-op when the definition declares no inputSchema", () => {
+    expect(() => validateRunInputs({ steps: [] }, {})).not.toThrow();
   });
 });

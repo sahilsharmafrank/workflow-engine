@@ -1,5 +1,5 @@
-import { PreFlightCheckActionOutcome, WorkflowDefinitionBody, resolveStepType } from "@wfe/sdk";
-import { array, mixed, object, string, ValidationError } from "yup";
+import { PreFlightCheckActionOutcome, WorkflowDefinitionBody, WorkflowParameters, resolveStepType } from "@wfe/sdk";
+import { array, boolean, mixed, object, string, ValidationError } from "yup";
 import { WfeError } from "../errors";
 import { StepRegistry } from "./step-registry";
 
@@ -27,8 +27,18 @@ const stepSchema = object({
   }).default(undefined),
 });
 
+const inputFieldSchema = object({
+  name: string().min(1).required(),
+  type: mixed<"string" | "number" | "boolean" | "json">()
+    .oneOf(["string", "number", "boolean", "json"])
+    .required(),
+  required: boolean().required(),
+  description: string().optional(),
+});
+
 const definitionSchema = object({
   steps: array().of(stepSchema).min(1).required(),
+  inputSchema: array().of(inputFieldSchema).optional(),
 });
 
 export async function validateDefinitionShape(body: unknown): Promise<WorkflowDefinitionBody> {
@@ -76,5 +86,25 @@ export function validateAgainstRegistry(body: WorkflowDefinitionBody, registry: 
         { statusCode: 400, code: "DEFINITION_UNKNOWN_STEP_TYPE" }
       );
     }
+  }
+}
+
+/**
+ * Rejects a run start that omits a required input declared in the
+ * definition's inputSchema. Presence-only: a provided value's type is never
+ * checked against the declared type (design doc §3, §5).
+ */
+export function validateRunInputs(
+  definition: WorkflowDefinitionBody, inputs: WorkflowParameters
+): void {
+  const missing = (definition.inputSchema ?? [])
+    .filter((field) => field.required && !(field.name in inputs))
+    .map((field) => ({ name: field.name }));
+
+  if (missing.length > 0) {
+    throw new WfeError(
+      `Missing required input(s): ${missing.map((m) => m.name).join(", ")}`,
+      { statusCode: 400, code: "RUN_INPUT_MISSING", details: missing }
+    );
   }
 }
