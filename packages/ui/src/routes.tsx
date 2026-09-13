@@ -6,6 +6,7 @@ import { DefinitionDetail } from "./screens/DefinitionDetail";
 import { DefinitionEditor } from "./screens/DefinitionEditor";
 import { Definitions } from "./screens/Definitions";
 import { RunDetail } from "./screens/RunDetail";
+import { RunForm } from "./screens/RunForm";
 import { RunTracker } from "./screens/RunTracker";
 import { StepCatalog } from "./screens/StepCatalog";
 
@@ -22,6 +23,7 @@ export const routes: RouteObject[] = [
       { path: "definitions/new", element: <DefinitionEditor /> },
       { path: "definitions/:id", element: <DefinitionDetail /> },
       { path: "definitions/:id/edit", element: <DefinitionEditor /> },
+      { path: "definitions/:id/run", element: <RunForm /> },
       { path: "batch-jobs", element: <BatchJobs /> },
       { path: "batch-jobs/:id", element: <BatchJobDetail /> },
     ],

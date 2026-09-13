@@ -89,6 +89,16 @@ function getAtPath(node: unknown, path: string[]): unknown {
   }, node);
 }
 
+// Captures the body of the last POST /runs request so a test can assert on
+// what was actually sent (name/version/inputs), not just the response shape.
+// Reset in the suite's shared afterEach (see resetRunDetailStatus above) so
+// a request captured in one test can't leak into the next.
+export let lastCreateRunRequest: { name: string; version: string; inputs?: Record<string, unknown> } | undefined;
+
+export function resetLastCreateRunRequest() {
+  lastCreateRunRequest = undefined;
+}
+
 // Mirrors the server's own filtering so a test that filters proves the screen
 // sends the parameters, not merely that it renders a list.
 const runHandlers = [
@@ -101,7 +111,10 @@ const runHandlers = [
     if (name) rows = rows.filter((r) => r.name === name);
     return HttpResponse.json({ rows, total: rows.length });
   }),
-  http.post(`${BASE}/runs`, () => HttpResponse.json({ runId: 42, status: "starting" }, { status: 201 })),
+  http.post(`${BASE}/runs`, async ({ request }) => {
+    lastCreateRunRequest = (await request.json()) as typeof lastCreateRunRequest;
+    return HttpResponse.json({ runId: 42, status: "starting" }, { status: 201 });
+  }),
   http.post(`${BASE}/runs/search`, async ({ request }) => {
     // Mirrors the controller, which reads `req.body.filter` (not the body
     // itself) — packages/server/src/controllers/runs.ts. A handler that read
@@ -245,6 +258,21 @@ export const definitionDetailFixture4 = {
   definition: { steps: [{ stepName: "Old", stepType: "core.noop", stepVersion: "1.0.0", stepInputs: [] }] },
 };
 
+// A third detail fixture (PUBLISHED, matching definitionFixtures[2] =
+// "adhoc" 1.0.0) carrying an inputSchema with both a required string field
+// and an optional boolean field — what RunForm.test.tsx needs to render a
+// real generated form and exercise both field types.
+export const definitionDetailFixture3 = {
+  ...definitionFixtures[2],
+  definition: {
+    steps: [{ stepName: "Only", stepType: "core.noop", stepVersion: "1.0.0", stepInputs: [] }],
+    inputSchema: [
+      { name: "jobId", type: "string", required: true },
+      { name: "dryRun", type: "boolean", required: false },
+    ],
+  },
+};
+
 // Typed against the fixtures' common shape rather than `typeof
 // definitionDetailFixture` — that would pin every entry's `definition.steps`
 // to fixture 1's inferred `stepInputs: never[]`, which fixture 2's real
@@ -256,6 +284,7 @@ const definitionDetailFixtures: Record<
 > = {
   1: definitionDetailFixture,
   2: definitionDetailFixture2,
+  3: definitionDetailFixture3,
   4: definitionDetailFixture4,
 };
 

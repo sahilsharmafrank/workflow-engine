@@ -61,5 +61,18 @@ describe("DefinitionDetail", () => {
     expect(screen.queryByRole("link", { name: "Edit" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("shows a Run button only for a published definition, linking to the run form", async () => {
+    renderAt("3");
+    expect(await screen.findByText("adhoc 1.0.0")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Run" })).toHaveAttribute("href", "/definitions/3/run");
+  });
+
+  it("hides the Run button for a draft definition", async () => {
+    renderAt("2");
+    expect(await screen.findByText("nightly 2.0.0")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Run" })).not.toBeInTheDocument();
   });
 });

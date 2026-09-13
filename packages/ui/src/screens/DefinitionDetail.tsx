@@ -48,6 +48,11 @@ export function DefinitionDetail() {
             Edit
           </Button>
         )}
+        {data.status === "published" && (
+          <Button component={Link} to={`/definitions/${data.id}/run`} variant="contained" size="small">
+            Run
+          </Button>
+        )}
         {publishLabel && (
           <Button
             variant="outlined" size="small"
