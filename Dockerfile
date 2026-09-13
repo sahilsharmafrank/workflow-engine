@@ -11,6 +11,7 @@ COPY packages/sdk/package.json packages/sdk/
 COPY packages/core/package.json packages/core/
 COPY packages/server/package.json packages/server/
 COPY packages/ui/package.json packages/ui/
+COPY examples/sample-plugin/package.json examples/sample-plugin/
 
 RUN npm ci
 

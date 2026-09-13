@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "declaration": false, "sourceMap": false },
-  "include": ["index.ts"]
+  "compilerOptions": { "declaration": false, "sourceMap": false, "noEmit": true, "allowImportingTsExtensions": true },
+  "include": ["index.ts", "steps/**/*.ts"]
 }
