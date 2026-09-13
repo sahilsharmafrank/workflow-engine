@@ -146,6 +146,7 @@ export function buildOpenApiSpec(registry: StepRegistry): Record<string, unknown
           responses: {
             201: { description: "Run started", content: { "application/json": { schema: { type: "object", properties: { runId: { type: "integer" }, status: { type: "string" } }, required: ["runId", "status"] } } } },
             200: { description: "Idempotent replay", content: { "application/json": { schema: { type: "object", properties: { runId: { type: "integer" }, status: { type: "string" } }, required: ["runId", "status"] } } } },
+            400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } },
           },
         },
         get: {
