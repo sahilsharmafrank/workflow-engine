@@ -1,4 +1,4 @@
-import { BaseStep, StepFactory, StepParams } from "@wfe/sdk";
+import { BaseStep, StepFactory, StepParams, WorkflowInputField } from "@wfe/sdk";
 import { WfeError } from "../errors";
 import { ConditionStep } from "../steps/condition-step";
 import { DelayStep } from "../steps/delay-step";
@@ -14,6 +14,10 @@ export interface StepRegistration {
   version: string;
   factory: StepFactory;
   description?: string;
+  /** Fields the step reads from `ctx.inputs`. Prototype: declared for core.http only. */
+  inputSchema?: WorkflowInputField[];
+  /** Fields the step writes to `ctx.step.outputs`. Prototype: declared for core.http only. */
+  outputSchema?: WorkflowInputField[];
 }
 
 export class StepRegistry {
@@ -31,6 +35,10 @@ export class StepRegistry {
 
   has(type: string): boolean {
     return this.registrations.has(type);
+  }
+
+  get(type: string): StepRegistration | undefined {
+    return this.registrations.get(type);
   }
 
   create(type: string, params: StepParams): BaseStep {
@@ -91,6 +99,20 @@ export function registerBuiltInSteps(registry: StepRegistry): void {
     version: "1.0.0",
     description: "Makes an HTTP request with optional retry/backoff.",
     factory: (params) => new HttpStep(params),
+    inputSchema: [
+      { name: "url", type: "string", required: true },
+      { name: "method", type: "string", required: false, description: "Defaults to GET" },
+      { name: "headers", type: "json", required: false },
+      { name: "body", type: "json", required: false },
+      { name: "retries", type: "number", required: false, description: "Defaults to 0" },
+      { name: "backoffMs", type: "number", required: false, description: "Defaults to 1000" },
+      { name: "timeoutMs", type: "number", required: false, description: "Defaults to 30000" },
+    ],
+    outputSchema: [
+      { name: "status", type: "number", required: true },
+      { name: "headers", type: "json", required: true },
+      { name: "body", type: "json", required: true },
+    ],
   });
   registry.register({
     type: "core.subWorkflow",

@@ -62,6 +62,27 @@ describe("definition validation", () => {
     expect(() => validateAgainstRegistry(parsed, registry)).toThrow(/Same/);
   });
 
+  it("rejects a core.http step that never captures the required url input", async () => {
+    const parsed = await validateDefinitionShape({
+      steps: [{ stepName: "Call", stepVersion: "1.0.0", stepType: "core.http", stepInputs: [] }],
+    });
+    const registry = new StepRegistry();
+    registerBuiltInSteps(registry);
+    expect(() => validateAgainstRegistry(parsed, registry)).toThrow(/Call.*url/);
+  });
+
+  it("accepts a core.http step that captures the required url input", async () => {
+    const parsed = await validateDefinitionShape({
+      steps: [{
+        stepName: "Call", stepVersion: "1.0.0", stepType: "core.http",
+        stepInputs: [{ targetFieldName: "url", modelEvaluationExpression: "workflowState.inputs.url" }],
+      }],
+    });
+    const registry = new StepRegistry();
+    registerBuiltInSteps(registry);
+    expect(() => validateAgainstRegistry(parsed, registry)).not.toThrow();
+  });
+
   it("rejects duplicate input names, which would break run-input addressing", async () => {
     const parsed = await validateDefinitionShape({
       steps: [{ stepName: "Only", stepVersion: "1.0.0", stepType: "core.noop", stepInputs: [] }],

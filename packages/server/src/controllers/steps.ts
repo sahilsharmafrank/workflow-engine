@@ -15,6 +15,7 @@ export function stepRoutes(deps: {
   router.get("/step-types", (req, res) => {
     const types = deps.registry.list().map((r) => ({
       type: r.type, version: r.version, description: r.description,
+      inputSchema: r.inputSchema, outputSchema: r.outputSchema,
     }));
     res.json(types);
   });

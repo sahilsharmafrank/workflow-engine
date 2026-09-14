@@ -91,10 +91,22 @@ export function validateAgainstRegistry(body: WorkflowDefinitionBody, registry: 
       );
     }
 
-    if (!registry.has(type)) {
+    const registration = registry.get(type);
+    if (!registration) {
       throw new WfeError(
         `Step "${step.stepName}" references unregistered step type "${type}"`,
         { statusCode: 400, code: "DEFINITION_UNKNOWN_STEP_TYPE" }
+      );
+    }
+
+    const capturedNames = new Set(step.stepInputs.map((expr) => expr.targetFieldName));
+    const missing = (registration.inputSchema ?? [])
+      .filter((field) => field.required && !capturedNames.has(field.name))
+      .map((field) => field.name);
+    if (missing.length > 0) {
+      throw new WfeError(
+        `Step "${step.stepName}" (${type}) is missing required input(s): ${missing.join(", ")}`,
+        { statusCode: 400, code: "DEFINITION_STEP_INPUT_MISSING", details: missing.map((name) => ({ path: name })) }
       );
     }
   }
